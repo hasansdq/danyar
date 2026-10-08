@@ -1,0 +1,551 @@
+// Educational Messenger - Custom Teacher Messenger
+// Roles: STUDENT, TEACHER, ADMIN
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String         @id @default(cuid())
+  username     String         @unique
+  password     String // hashed via bcrypt
+  role         String         @default("STUDENT") // STUDENT | TEACHER | ADMIN | SUPERADMIN
+  fullName     String
+  phone        String?
+  avatarColor String?        // deterministic color for avatar bubble
+  avatar      String?        // optional profile picture URL (/uploads/...)
+  schoolId     String?       // which school this user belongs to (null for SUPERADMIN + legacy users)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  school       School?  @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  principalOf  School?  @relation("SchoolPrincipal")
+  memberships  ClassMembership[]
+  messages     Message[]
+  deletedMessages Message[] @relation("MessageDeletedBy")
+  pinnedMessages Message[]  @relation("MessagePinnedBy")
+  messageReads     MessageRead[]
+  messageSaves     MessageSaved[]
+  aiConversations  AIConversation[]
+  pushSubscriptions PushSubscription[]
+  notifications     Notification[]
+  assignments  Assignment[]
+  assignmentSubmissions AssignmentSubmission[] @relation("AssignmentSubmissionStudent")
+  submissionUpdates AssignmentSubmission[] @relation("AssignmentSubmissionUpdater")
+  questions    SampleQuestion[]
+  gradesGiven  Grade[]
+  behaviorGiven BehaviorMark[]
+  gradesReceived Grade[]      @relation("GradeStudent")
+  behaviorReceived BehaviorMark[] @relation("BehaviorStudent")
+  pollsCreated Poll[]
+  pollVotes    PollVote[]
+  closedChats  ClassRoom[]   @relation("ChatClosedBy")
+  directChatsA DirectChat[] @relation("DirectChatUserA")
+  directChatsB DirectChat[] @relation("DirectChatUserB")
+  directMessages DirectMessage[]
+  deletedDirectMessages DirectMessage[] @relation("DirectMessageDeletedBy")
+  attendances Attendance[]
+  // Phase 35 — virtual classroom (online class) module.
+  classroomSessionsStarted ClassroomSession[] @relation("ClassroomSessionStartedBy")
+  classroomParticipations ClassroomParticipant[]
+}
+
+model ClassRoom {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  gradeLevel  String?  // e.g. "Grade 10", "پایه دهم"
+  chatClosed  Boolean  @default(false)
+  chatClosedAt DateTime?
+  chatClosedById String?
+  chatClosedBy User?  @relation("ChatClosedBy", fields: [chatClosedById], references: [id])
+  // Per-class file upload limits (set by teacher/admin).
+  fileUploadEnabled  Boolean  @default(true)
+  maxFileSizeMb      Int      @default(10) // 0 = no limit; otherwise MB cap
+  allowedFileTypes   String?  // JSON array of allowed type categories: ["image","pdf","video"]; null = all allowed
+  section     String?  // شعبه (e.g. "الف", "ب") — class section/branch
+  schoolId    String?  // which school this class belongs to
+  parentClassId String?  // if set, this ClassRoom is a "group" (chat) within the parent class
+  avatar      String?  // group profile picture URL
+  // Phase 35b — per-group streaming (online class) toggle. Default OFF —
+  // a TEACHER must explicitly enable it via the header icon before the FAB
+  // appears for any group member. Group-scoped: toggling one group doesn't
+  // affect others. Also gated by the school's `streamingEnabled` flag —
+  // when the school flag is OFF, this flag is ignored + streaming is fully
+  // disabled in the school.
+  streamingEnabled Boolean @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  school      School?  @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  parentClass ClassRoom? @relation("ClassGroups", fields: [parentClassId], references: [id], onDelete: Cascade)
+  groups      ClassRoom[] @relation("ClassGroups")
+  memberships ClassMembership[]
+  messages    Message[]
+  assignments Assignment[]
+  questions   SampleQuestion[]
+  grades      Grade[]
+  behaviors   BehaviorMark[]
+  polls       Poll[]
+  attendances Attendance[]
+  // Phase 35 — virtual classroom (online class) sessions hosted in this class.
+  classroomSessions ClassroomSession[]
+}
+
+model ClassMembership {
+  id        String   @id @default(cuid())
+  classId   String
+  userId    String
+  role      String   @default("STUDENT") // STUDENT | TEACHER
+  createdAt DateTime @default(now())
+
+  class     ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([classId, userId])
+  @@index([classId])
+  @@index([userId])
+}
+
+model Message {
+  id          String   @id @default(cuid())
+  classId     String
+  senderId    String
+  content     String
+  createdAt   DateTime @default(now())
+  // Announcement messages (sent by the principal) get a red animated border
+  // in the chat UI to distinguish them from regular messages.
+  isAnnouncement Boolean @default(false)
+  // Reply — the message this one is replying to (null = not a reply).
+  replyToId    String?
+  // Forward — the original message this was forwarded from (null = original).
+  forwardedFromId String?
+  // Edit — set when the message content was edited by the sender.
+  editedAt     DateTime?
+  // Linked assignment/sample-question (for "forward to chat" posts).
+  linkedAssignmentId    String?
+  linkedSampleQuestionId String?
+  // Soft-delete for the Telegram-style delete feature.
+  // Admin/teacher can delete any message anytime; students can delete
+  // their own message only within 12 hours of sending.
+  deletedAt   DateTime?
+  deletedById String?
+  deletedBy   User?    @relation("MessageDeletedBy", fields: [deletedById], references: [id])
+  // Pin (سنجاق) — set when a TEACHER/ADMIN/SUPERADMIN pins a message to
+  // the top of the chat for the whole class. `pinnedById` is the user who
+  // pinned; `pinnedAt` is when. Both are nullable (null = not pinned).
+  pinnedById  String?
+  pinnedAt    DateTime?
+  pinnedBy    User?    @relation("MessagePinnedBy", fields: [pinnedById], references: [id], onDelete: SetNull)
+  // File attachment (PDF / image / video). Null for plain text messages.
+  fileUrl     String?  // public path: /uploads/<unique>.<ext>
+  fileName    String?  // original file name from the uploader
+  fileType    String?  // category: "image" | "pdf" | "video" | "file"
+  fileSize    Int?     // bytes
+  mimeType    String?  // e.g. image/png, application/pdf, video/mp4
+
+  class     ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
+  sender    User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  // Reply / forward self-relations.
+  replyTo      Message?  @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies       Message[] @relation("MessageReply")
+  forwardedFrom Message?  @relation("MessageForward", fields: [forwardedFromId], references: [id], onDelete: SetNull)
+  forwards      Message[] @relation("MessageForward")
+  linkedAssignment    Assignment?      @relation("MessageLinkedAssignment", fields: [linkedAssignmentId], references: [id], onDelete: SetNull)
+  linkedSampleQuestion SampleQuestion?  @relation("MessageLinkedSampleQuestion", fields: [linkedSampleQuestionId], references: [id], onDelete: SetNull)
+  // Read receipts — who has seen this message.
+  reads         MessageRead[]
+  // Saved/bookmarked messages — who has saved this message.
+  saves         MessageSaved[]
+
+  @@index([classId, createdAt])
+  @@index([deletedAt])
+  @@index([replyToId])
+}
+
+// Saved/bookmarked messages — one row per (message, user) who saved it.
+model MessageSaved {
+  id          String   @id @default(cuid())
+  messageId   String
+  userId      String
+  savedAt     DateTime @default(now())
+
+  message     Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+  @@index([userId])
+}
+
+// Read receipts — one row per (message, user) who has seen it.
+model MessageRead {
+  id          String   @id @default(cuid())
+  messageId   String
+  userId      String
+  readAt      DateTime @default(now())
+
+  message     Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+  @@index([userId])
+}
+
+model Assignment {
+  id          String   @id @default(cuid())
+  classId     String
+  title       String
+  description String?
+  dueDate     DateTime?
+  fileName    String?
+  fileUrl     String?  // stored in /public/uploads
+  fileSize    Int?
+  createdAt   DateTime @default(now())
+  createdById String
+
+  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
+  createdBy   User      @relation(fields: [createdById], references: [id])
+  submissions AssignmentSubmission[]
+  linkedMessages Message[] @relation("MessageLinkedAssignment")
+
+  @@index([classId, createdAt])
+}
+
+// Per-student assignment status. One row per (assignment, student).
+// status: UNCHECKED (بررسی نشده) | DONE (انجام شده) | INCOMPLETE (ناقص) | NOT_DONE (انجام نشده)
+model AssignmentSubmission {
+  id           String   @id @default(cuid())
+  assignmentId String
+  studentId    String
+  status       String   @default("UNCHECKED") // UNCHECKED | DONE | INCOMPLETE | NOT_DONE
+  note         String?  // optional teacher note
+  updatedAt    DateTime @updatedAt
+  updatedById  String?
+  createdAt    DateTime @default(now())
+
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  student      User      @relation("AssignmentSubmissionStudent", fields: [studentId], references: [id])
+  updatedBy    User?     @relation("AssignmentSubmissionUpdater", fields: [updatedById], references: [id])
+
+  @@unique([assignmentId, studentId])
+  @@index([assignmentId])
+  @@index([studentId])
+}
+
+model SampleQuestion {
+  id          String   @id @default(cuid())
+  classId     String
+  title       String
+  description String?
+  fileName    String?
+  fileUrl     String?
+  createdAt   DateTime @default(now())
+  createdById String
+
+  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
+  createdBy   User      @relation(fields: [createdById], references: [id])
+  linkedMessages Message[] @relation("MessageLinkedSampleQuestion")
+
+  @@index([classId, createdAt])
+}
+
+model Grade {
+  id          String   @id @default(cuid())
+  classId     String
+  studentId   String
+  title       String
+  score       Float
+  maxScore    Float    @default(20)
+  createdAt   DateTime @default(now())
+  createdById String
+
+  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
+  student     User      @relation("GradeStudent", fields: [studentId], references: [id])
+  createdBy   User      @relation(fields: [createdById], references: [id])
+
+  @@index([classId, studentId])
+  @@index([studentId, createdAt])
+}
+
+model BehaviorMark {
+  id          String   @id @default(cuid())
+  classId     String
+  studentId   String
+  type        String   // POSITIVE | NEGATIVE
+  reason      String
+  value       Int      @default(1) // +1 / -1
+  createdAt   DateTime @default(now())
+  createdById String
+
+  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
+  student     User      @relation("BehaviorStudent", fields: [studentId], references: [id])
+  createdBy   User      @relation(fields: [createdById], references: [id])
+
+  @@index([classId, studentId])
+  @@index([studentId, createdAt])
+}
+
+// Telegram-style polls inside class chat.
+// `options` is a JSON-encoded string array (SQLite has no native list type).
+model Poll {
+  id          String   @id @default(cuid())
+  classId     String
+  question    String
+  options     String   // JSON: ["گزینه ۱", "گزینه ۲", ...]
+  multipleChoice Boolean @default(false)
+  createdAt   DateTime @default(now())
+  createdById String
+  closedAt    DateTime?
+
+  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
+  createdBy   User      @relation(fields: [createdById], references: [id])
+  votes       PollVote[]
+
+  @@index([classId, createdAt])
+}
+
+model PollVote {
+  id          String   @id @default(cuid())
+  pollId      String
+  userId      String
+  optionIndex Int
+  createdAt   DateTime @default(now())
+
+  poll        Poll @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  user        User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId, optionIndex])
+  @@index([pollId, optionIndex])
+}
+
+// Attendance tracking — one row per (class, student, date, period).
+// `date` is stored as a Jalali (Persian) calendar string "YYYY-MM-DD"
+// (e.g. "1403-07-15"). `period` is the class period (1..4). `present` is
+// true when the student was in class. `violations` is an optional JSON
+// array of Persian violation descriptions, e.g.
+//   ["تأخیر", "بی‌نظمی"]
+// Stored as a String because SQLite has no native list/array type.
+model Attendance {
+  id         String   @id @default(cuid())
+  classId    String
+  userId     String
+  date       String   // Jalali "YYYY-MM-DD"
+  period     Int      // 1..4
+  present    Boolean  @default(true)
+  violations String?  // JSON array of Persian strings, nullable
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  class      ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([classId, userId, date, period])
+  @@index([classId, date])
+  @@index([userId, date])
+  @@index([date])
+}
+
+// Modular feature permissions per role. The SUPERADMIN toggles these to
+// enable/disable capabilities for STUDENT / TEACHER / ADMIN roles.
+model RolePermission {
+  id         String   @id @default(cuid())
+  role       String   // STUDENT | TEACHER | ADMIN
+  featureKey String   // e.g. "chat", "create_assignment", "manage_users"
+  enabled    Boolean  @default(true)
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+
+  @@unique([role, featureKey])
+  @@index([role])
+}
+
+// Schools — managed by SUPERADMIN. Each school has a principal (an ADMIN user),
+// teachers, and students. Classes belong to a school.
+model School {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  address     String?
+  principalId String?  @unique // the ADMIN user who is the principal of this school
+  // Direct-chat (DM) permission toggles — managed by the principal.
+  // principal↔teacher is ALWAYS enabled (no toggle).
+  dmTeacherStudent   Boolean  @default(true)  // معلم ↔ دانش‌آموز
+  dmStudentStudent   Boolean  @default(true)  // دانش‌آموز ↔ دانش‌آموز
+  dmPrincipalStudent Boolean  @default(true)  // مدیر ↔ دانش‌آموز
+  // Phase 35b — per-school streaming (online class) toggle. Default ON so
+  // existing schools keep the feature available. When OFF, streaming is
+  // fully disabled in this school — the FAB + header toggle are hidden from
+  // all groups + POST /api/classroom/start returns 403. Managed by the
+  // SUPERADMIN in /superadmin/schools/[id].
+  streamingEnabled  Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  principal   User?   @relation("SchoolPrincipal", fields: [principalId], references: [id], onDelete: SetNull)
+  members     User[]  // all users with schoolId = this school
+  classes     ClassRoom[]
+  directChats DirectChat[]
+}
+
+// Global site-wide settings managed by SUPERADMIN.
+// Each row is a key/value pair. `value` is a string; booleans stored as "true"/"false".
+model SiteSetting {
+  key       String   @id // e.g. "lazyLoading", "navigationProgress"
+  value     String   // e.g. "true" / "false"
+  updatedAt DateTime @updatedAt
+}
+
+// Direct (1:1) private chats between two users. Scoped to a school for
+// permission checks. The pair is stored canonically: userAId < userBId (by
+// cuid string sort) so the unique constraint dedupes regardless of who
+// initiated.
+model DirectChat {
+  id           String   @id @default(cuid())
+  userAId      String   // the "smaller" cuid
+  userBId      String   // the "larger" cuid
+  schoolId     String?  // the school both users belong to (for DM-permission checks)
+  createdAt    DateTime @default(now())
+  lastMessageAt DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  userA        User   @relation("DirectChatUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB        User   @relation("DirectChatUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  school       School? @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  messages     DirectMessage[]
+
+  @@unique([userAId, userBId])
+  @@index([userAId])
+  @@index([userBId])
+  @@index([schoolId])
+}
+
+// Messages in a direct chat. Mirrors the Message model structure (content +
+// optional file attachment + soft-delete).
+model DirectMessage {
+  id          String   @id @default(cuid())
+  chatId      String
+  senderId    String
+  content     String
+  createdAt   DateTime @default(now())
+  // Read receipt — set when the recipient opens the chat (marks all earlier
+  // messages from the other user as read). Null = unread (sender sees single ✓).
+  readAt      DateTime?
+  // Soft-delete (same rules as class messages: admin/teacher anytime within
+  // their scope; sender within 12h — but for DMs, "teacher" rules don't apply
+  // the same way; keep it simple: sender can delete own within 12h; the other
+  // user can delete any in their DM; SUPERADMIN anytime).
+  deletedAt   DateTime?
+  deletedById String?
+  deletedBy   User?    @relation("DirectMessageDeletedBy", fields: [deletedById], references: [id])
+  // File attachment (image / pdf / video), same shape as Message.
+  fileUrl     String?
+  fileName    String?
+  fileType    String?  // "image" | "pdf" | "video" | "file"
+  fileSize    Int?
+  mimeType    String?
+
+  chat        DirectChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender      User      @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([chatId, createdAt])
+  @@index([deletedAt])
+}
+
+// AI assistant conversation history — stores each message exchanged
+// between a user (principal/superadmin) and the AI assistant.
+model AIConversation {
+  id          String   @id @default(cuid())
+  userId      String
+  role        String   // "user" | "assistant"
+  content     String
+  actionJson  String?  // JSON string of action data (for assistant messages with actions)
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+// Push notification subscriptions — one per device/browser.
+// A user can have multiple subscriptions (phone, desktop, etc.).
+model PushSubscription {
+  id          String   @id @default(cuid())
+  userId      String
+  endpoint    String   @unique // the browser push endpoint URL
+  p256dh      String   // base64-encoded ECDH public key
+  auth        String   // base64-encoded auth secret
+  userAgent   String?  // browser/device identification
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// In-app notification records — tracks each notification sent to a user.
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String
+  type        String   // "message" | "announcement" | "admin_broadcast"
+  title       String
+  body        String
+  url         String?  // deep-link URL to navigate to when clicked
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([isRead])
+}
+
+// Phase 35 — Virtual Classroom (online class) module.
+// A ClassroomSession represents one live online class session hosted in a
+// ClassRoom (subject group). The teacher starts it via the FAB in the
+// class chat; students join via the same FAB or via a shared room code.
+// Attendance is recorded per-participant in ClassroomParticipant.
+model ClassroomSession {
+  id          String   @id @default(cuid())
+  classId     String
+  startedById String
+  // 6-character room code for shareable join links. Generated server-side,
+  // unique. The teacher can share `https://.../?classroom=<code>` to let
+  // students join directly.
+  roomCode    String   @unique
+  status      String   @default("live") // "live" | "ended"
+  startedAt   DateTime @default(now())
+  endedAt     DateTime?
+
+  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
+  startedBy   User      @relation("ClassroomSessionStartedBy", fields: [startedById], references: [id])
+  participants ClassroomParticipant[]
+
+  @@index([classId, status])
+  @@index([startedById])
+}
+
+// Per-user attendance row for a ClassroomSession. One row per
+// (session, user) — if the user re-joins after a disconnect, we update
+// `leftAt` to null + create a new row when they leave again (so we have
+// a full attendance history with join/leave timestamps).
+model ClassroomParticipant {
+  id          String   @id @default(cuid())
+  sessionId   String
+  userId      String
+  role        String   // "TEACHER" | "STUDENT" — mirrors the user's role in the class
+  joinedAt    DateTime @default(now())
+  leftAt      DateTime?
+
+  session     ClassroomSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, userId])
+  @@index([sessionId])
+  @@index([userId])
+}

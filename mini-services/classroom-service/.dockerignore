@@ -1,0 +1,7 @@
+node_modules
+*.log
+start-bg.sh
+schema.prisma.bak
+Dockerfile
+.dockerignore
+.env

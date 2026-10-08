@@ -1,0 +1,214 @@
+# ============================================================
+# docker-compose.yml — Daniyar Educational Messenger (Production)
+#
+# Services: Caddy gateway (TLS) + Next.js app + chat-service +
+# classroom-service. Optional PostgreSQL profile.
+#
+# SECURITY:
+#  - Only Caddy publishes ports; internal services are reachable ONLY
+#    through the gateway (XTransformPort routing).
+#  - Required secrets fail the deployment at `docker compose up` when
+#    missing (no defaults): NEXTAUTH_SECRET, SOCKET_AUTH_SECRET.
+#  - All app containers run as non-root (Dockerfile USER appuser) with
+#    no-new-privileges + all Linux capabilities dropped.
+#  - Resource limits + log rotation on every service.
+#  - Data lives in named volumes — removing a container NEVER removes data.
+#
+# Database:
+#  - Default: shared SQLite file on the db_data volume (single-host).
+#  - Recommended for multi-instance/high-load: PostgreSQL profile —
+#    see DOCKER-README.md («پستگرس») + .env.example.
+# ============================================================
+
+services:
+  # --- HTTP-only gateway behind DirectAdmin: loopback port 3034 ---
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3034:80"
+    environment:
+      # SSL is terminated by DirectAdmin.
+      - SITE_ADDRESS=:80
+    volumes:
+      - ./Caddyfile.docker:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      nextjs:
+        condition: service_healthy
+      chat-service:
+        condition: service_healthy
+      classroom-service:
+        condition: service_healthy
+    networks:
+      - daniyar
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+
+  # --- Next.js main app (port 3000, NOT published) ---
+  nextjs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # sqlite (default) | postgres — must match DATABASE_URL below.
+        DB_PROVIDER: ${DB_PROVIDER:-sqlite}
+    restart: unless-stopped
+    environment:
+      - OTP_HASH_SECRET=${OTP_HASH_SECRET:-}
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_SUBJECT=${VAPID_SUBJECT:-}
+      - SMS_OTPY_API_KEY=${SMS_OTPY_API_KEY:-}
+      - SMS_MELIPAYAMAK_USERNAME=${SMS_MELIPAYAMAK_USERNAME:-}
+      - SMS_MELIPAYAMAK_PASSWORD=${SMS_MELIPAYAMAK_PASSWORD:-}
+      - SMS_MELIPAYAMAK_FROM=${SMS_MELIPAYAMAK_FROM:-}
+      - SMS_MELIPAYAMAK_BODY_ID=${SMS_MELIPAYAMAK_BODY_ID:-}
+      - SMS_FARAZ_API_KEY=${SMS_FARAZ_API_KEY:-}
+      - SMS_FARAZ_SENDER=${SMS_FARAZ_SENDER:-}
+      - SMS_FARAZ_PATTERN_CODE=${SMS_FARAZ_PATTERN_CODE:-}
+      - SMS_FARAZ_PATTERN_ARG=${SMS_FARAZ_PATTERN_ARG:-}
+      - SMS_SMSIR_API_KEY=${SMS_SMSIR_API_KEY:-}
+      - SMS_SMSIR_LINE_NUMBER=${SMS_SMSIR_LINE_NUMBER:-}
+      - SMS_SMSIR_TEMPLATE_ID=${SMS_SMSIR_TEMPLATE_ID:-}
+      - SMS_SMSIR_TEMPLATE_PARAM=${SMS_SMSIR_TEMPLATE_PARAM:-}
+      - NODE_ENV=production
+      # sqlite: file:… on the db_data volume | postgres: postgresql://…
+      - DATABASE_URL=${DATABASE_URL:-file:/data/db/custom.db}
+      - UPLOAD_DIR=/data/uploads
+      - NEXTAUTH_URL=${NEXTAUTH_URL:?NEXTAUTH_URL is required}
+      # SECURITY: no default — deployment fails when missing/short.
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is required}
+      # Shared HMAC key for socket.io JWTs (identical in all 3 services).
+      - SOCKET_AUTH_SECRET=${SOCKET_AUTH_SECRET:?SOCKET_AUTH_SECRET is required}
+      # Extra allowed origins for socket.io (comma separated; same-host via
+      # the gateway is always allowed).
+      - SOCKET_ALLOWED_ORIGINS=${SOCKET_ALLOWED_ORIGINS:-}
+      # SECURITY: required — the admin password is never generated or printed.
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      # Demo users (teacher1/student1...) are FORBIDDEN in production —
+      # docker-entrypoint.sh fails fast when this is true.
+      - SEED_DEMO_DATA=${SEED_DEMO_DATA:-false}
+      # WebRTC STUN/TURN (optional)
+      - STUN_SERVERS=${STUN_SERVERS:-}
+      - TURN_SERVER=${TURN_SERVER:-}
+      - TURN_USERNAME=${TURN_USERNAME:-}
+      - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+    volumes:
+      - db_data:/data/db
+      - uploads_data:/data/uploads
+    networks:
+      - daniyar
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # --- chat-service (socket.io, port 3003, NOT published) ---
+  chat-service:
+    build:
+      context: ./mini-services/chat-service
+      dockerfile: Dockerfile
+      args:
+        DB_PROVIDER: ${DB_PROVIDER:-sqlite}
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - DB_URL=${DATABASE_URL:-file:/data/db/custom.db}
+      - SOCKET_AUTH_SECRET=${SOCKET_AUTH_SECRET:?SOCKET_AUTH_SECRET is required}
+      - SOCKET_ALLOWED_ORIGINS=${SOCKET_ALLOWED_ORIGINS:-}
+    volumes:
+      - db_data:/data/db
+    depends_on:
+      nextjs:
+        condition: service_healthy
+    networks:
+      - daniyar
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # --- classroom-service (socket.io + WebRTC, port 3004, NOT published) ---
+  classroom-service:
+    build:
+      context: ./mini-services/classroom-service
+      dockerfile: Dockerfile
+      args:
+        DB_PROVIDER: ${DB_PROVIDER:-sqlite}
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - DB_URL=${DATABASE_URL:-file:/data/db/custom.db}
+      - SOCKET_AUTH_SECRET=${SOCKET_AUTH_SECRET:?SOCKET_AUTH_SECRET is required}
+      - SOCKET_ALLOWED_ORIGINS=${SOCKET_ALLOWED_ORIGINS:-}
+    volumes:
+      - db_data:/data/db
+    depends_on:
+      nextjs:
+        condition: service_healthy
+    networks:
+      - daniyar
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+
+volumes:
+  db_data:
+    driver: local
+  uploads_data:
+    driver: local
+  pg_data:
+    driver: local
+  caddy_data:
+  caddy_config:
+
+networks:
+  daniyar:
+    driver: bridge

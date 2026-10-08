@@ -1,0 +1,49 @@
+# ---- Build artifacts ----
+node_modules
+.next
+.git
+.turbo
+tmp/
+
+# ---- Logs ----
+*.log
+dev.log
+server.log
+
+# ---- Mini-services have their own Dockerfiles / build contexts ----
+mini-services
+
+# ---- Sandbox & dev artifacts — NOT part of the app ----
+upload
+download
+skills
+agent-ctx
+tool-results
+tests
+examples
+.zscripts
+*.tar
+
+# ---- Environment files (secrets provided at runtime) ----
+.env
+.env.docker
+.env.example
+
+# ---- Docker files (not needed inside the image) ----
+Dockerfile*
+docker-compose*
+Caddyfile*
+deploy.sh
+backup.sh
+restore.sh
+.dockerignore
+DOCKER-README.md
+backups
+
+# ---- Data (lives on volumes, not in the image) ----
+# The SQLite DB is created/imported on the db_data volume at runtime;
+# uploaded files live on the uploads_data volume
+# (docker-entrypoint.sh symlinks public/uploads → /data/uploads).
+db
+data
+public/uploads

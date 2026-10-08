@@ -1,0 +1,6 @@
+node_modules
+*.log
+start-bg.sh
+Dockerfile
+.dockerignore
+.env
