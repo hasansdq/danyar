@@ -76,7 +76,7 @@ export function SessionDetailDialog({
         cache: 'no-store',
       })
       if (!r.ok) {
-        throw new Error((await r.json().catch(() => null)?.error) ?? `کد ${r.status}`)
+        throw new Error(((await r.json().catch(() => null))?.error) ?? `کد ${r.status}`)
       }
       setData((await r.json()) as SessionDetailData)
       setError(null)
