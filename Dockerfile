@@ -1,110 +1,86 @@
-# ============================================================
-# Dockerfile — Next.js app (Bun-based, production)
-# Multi-stage: builder → runner (minimal, hardened, non-root)
-#
-# Build args:
-#   DB_PROVIDER=sqlite (default) | postgres
-#     - sqlite   : image uses prisma/schema.prisma + prisma/migrations
-#     - postgres : image uses prisma/schema.postgres.prisma +
-#                  prisma/migrations-pg (swapped at build time)
-# ============================================================
-
-ARG BUN_IMAGE=oven/bun:1-debian
-
-# ---------------- Stage 1: Build ----------------
-FROM ${BUN_IMAGE} AS builder
-ARG DB_PROVIDER=sqlite
+# ─── مرحله ۱: نصب و بیلد با Bun ───
+FROM oven/bun:1 AS builder
 WORKDIR /app
 
-# Install dependencies — STRICT frozen lockfile (reproducible builds; a
-# missing/out-of-sync lockfile must fail the build, never silently resolve).
+# متغیرهای عمومی کلاینت — هنگام build در باندل ثبت می‌شوند.
+# در استقرار، کلاینت Socket.IO همان دامنه سایت را صدا می‌زند و پراکسی داخلی
+# مسیر /socket.io را به سرویس سوکت می‌فرستد (پرچم‌های dev برای Docker لازم نیست).
+ARG NEXT_PUBLIC_SOCKET_URL=/
+ARG NEXT_PUBLIC_SOCKET_PATH=/socket.io
+# آدرس SFU رسانه — خالی = همان‌مبدأ (مسیر /rtc)
+ARG NEXT_PUBLIC_LIVEKIT_WS_URL=
+ENV NEXT_PUBLIC_SOCKET_URL=${NEXT_PUBLIC_SOCKET_URL} \
+    NEXT_PUBLIC_SOCKET_PATH=${NEXT_PUBLIC_SOCKET_PATH} \
+    NEXT_PUBLIC_LIVEKIT_WS_URL=${NEXT_PUBLIC_LIVEKIT_WS_URL}
+
+# نصب وابستگی‌ها (با کش لایه)
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
-# Copy source (NO .env — secrets are provided at runtime)
+# کد پروژه
 COPY . .
 
-# Database provider swap (postgres builds use the postgres schema +
-# postgres-dialect migrations). Done BEFORE `prisma generate` so the client
-# engine matches the provider.
-RUN if [ "$DB_PROVIDER" = "postgres" ]; then \
-      cp prisma/schema.postgres.prisma prisma/schema.prisma && \
-      rm -rf prisma/migrations && \
-      cp -r prisma/migrations-pg prisma/migrations && \
-      echo "[build] using PostgreSQL schema + migrations"; \
-    else \
-      echo "[build] using SQLite schema + migrations"; \
-    fi
+# تولید کلاینت Prisma (موتورها برای همین پلتفرم build دانلود می‌شوند)
+RUN bunx prisma generate
 
-# Generate Prisma client (linux-debian query engine, correct provider)
-RUN if [ "$DB_PROVIDER" = "postgres" ]; then export DATABASE_URL=postgresql://build:build@localhost:5432/build; else export DATABASE_URL=file:/tmp/build.db; fi; bunx prisma generate
+# بیلد Next.js — بررسی TypeScript فعال است؛ خطا بیلد را واقعاً رد می‌کند
+RUN bun run build
 
-# Build Next.js (standalone output — next.config.ts has output: "standalone").
-# SECURITY: next.config.ts has typescript.ignoreBuildErrors=false — the build
-# FAILS on any TypeScript error (it was previously true, letting type errors
-# ship to production).
-# `--bun` forces the Bun runtime for node_modules/.bin scripts — the
-# oven/bun image ships no Node.js.
-RUN if [ "$DB_PROVIDER" = "postgres" ]; then export DATABASE_URL=postgresql://build:build@localhost:5432/build; else export DATABASE_URL=file:/tmp/build.db; fi; \
-    NEXTAUTH_SECRET=build-only-placeholder-never-used-at-runtime \
-    SOCKET_AUTH_SECRET=build-only-placeholder-never-used-at-runtime bun --bun run build
+# کامپایل اسکریپت seed برای اجرا با Node در مرحله اجرا (bcryptjs داخل باندل می‌ماند)
+RUN bun build prisma/seed.ts --target node \
+    --external @prisma/client \
+    --outfile prisma/seed.mjs
 
-# ---------------- Stage 2: Production runtime ----------------
-FROM ${BUN_IMAGE} AS runner
-ARG DB_PROVIDER=sqlite
+# کامپایل سرویس مستقل Socket.IO (خودکفا؛ فقط @prisma/client خارجی)
+RUN bun build mini-services/socket-server/index.ts --target node \
+    --external @prisma/client \
+    --outfile socket-server.mjs
+
+# ─── مرحله ۲: اجرا با Node glibc (سازگار با موتورهای Prisma و sharp) ───
+FROM node:20-bookworm-slim AS runner
+
+# sqlite3 برای وضعیت پایه مهاجرت و پشتیبان‌گیری؛ openssl برای Prisma
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+ENV DATABASE_URL=file:/data/daniar.db \
+    UPLOAD_DIR=/data/uploads
+ENV SOCKET_PORT=3003 \
+    SOCKET_PATH=/socket.io
+ENV PRISMA_HIDE_UPDATE_MESSAGE=1
 
-ENV NODE_ENV=production
-ENV PORT=3000
-ENV HOSTNAME=0.0.0.0
-# Default DB path — docker-compose mounts the db_data volume at /data/db.
-# (PostgreSQL deployments override DATABASE_URL at runtime.)
-ENV DATABASE_URL=file:/data/db/custom.db
-# Upload directory — on the persistent uploads volume
-# (docker-entrypoint.sh symlinks public/uploads → /data/uploads)
-ENV UPLOAD_DIR=/data/uploads
+# خروجی standalone این Next.js (اسکریپت build، static و public را هم داخل آن کپی می‌کند)
+COPY --from=builder /app/.next/standalone ./
 
-# --- SECURITY: run as an unprivileged user (never root) ---
-RUN groupadd -r -g 10001 appuser && useradd -r -u 10001 -g appuser -s /usr/sbin/nologin appuser
+# Prisma برای migrate deploy/resolve + اسکریپت seed
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+# کلاینت تولیدشده + موتورهای واقعی کوئری/اسکیما (برای server.js، seed.mjs و socket-server.mjs)
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
 
-# Copy standalone Next.js server (already includes .next/static + public
-# thanks to the "cp" steps inside `bun run build` in the builder stage).
-COPY --from=builder --chown=appuser:appuser /app/.next/standalone ./
+# سرویس Socket.IO مستقل
+COPY --from=builder /app/socket-server.mjs ./socket-server.mjs
 
-# Copy Prisma client + CLI + schema + MIGRATIONS
-# (docker-entrypoint.sh runs `prisma migrate deploy` — no db push, no
-# --accept-data-loss in production).
-COPY --from=builder --chown=appuser:appuser /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder --chown=appuser:appuser /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder --chown=appuser:appuser /app/node_modules/prisma ./node_modules/prisma
-COPY --from=builder --chown=appuser:appuser /app/prisma ./prisma
+# اسکریپت راه‌اندازی
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
-# Copy seed script + its import (src/lib/password-policy.ts) + bcryptjs
-# (for seeding the admin user on first boot)
-COPY --from=builder --chown=appuser:appuser /app/scripts ./scripts
-COPY --from=builder --chown=appuser:appuser /app/src/lib/password-policy.ts ./src/lib/password-policy.ts
-COPY --from=builder --chown=appuser:appuser /app/node_modules/bcryptjs ./node_modules/bcryptjs
+# ─── کاربر غیر root — Next.js و Socket.IO با همین کاربر اجرا می‌شوند ───
+RUN groupadd -g 10001 daniar \
+    && useradd -m -u 10001 -g 10001 daniar \
+    && chown -R daniar:daniar /app
+USER daniar
 
-# Copy entrypoint
-COPY --chown=appuser:appuser docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+# دیتابیس SQLite و پیوست‌ها روی ولوم پایدار (مالکیت توسط سرویس init-data تنظیم می‌شود)
+VOLUME ["/data"]
 
-# Data dirs on the persistent volumes, owned by the unprivileged user.
-# Fresh named volumes inherit this ownership on first use.
-RUN mkdir -p /data/db /data/uploads && chown -R appuser:appuser /data /app
-
-# Healthcheck (runs as appuser) — dedicated /api/health endpoint:
-# 200 = HTTP server + database reachable, 503 = DB degraded. The DB probe
-# makes `service_healthy` gating (caddy + mini-services) reflect real
-# availability, not just a listening socket.
-# start-period 40s covers first-boot migrations + seeding (entrypoint runs
-# BEFORE the server starts).
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD bun -e "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-
-USER appuser
-
-EXPOSE 3000
-
-ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["bun", "server.js"]
+EXPOSE 3000 3003
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["web"]

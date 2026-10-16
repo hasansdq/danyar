@@ -1,86 +1,48 @@
-import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { requireAdminApi } from "@/lib/api-auth";
+import { NextResponse } from 'next/server'
+import { db } from '@/lib/db'
+import { requireSuperAdmin } from '@/lib/api-auth'
 
-export const dynamic = "force-dynamic";
+/** آمار کلی پلتفرم برای داشبورد مدیر کل */
+export async function GET() {
+  const res = await requireSuperAdmin()
+  if ('response' in res) return res.response
 
-// GET /api/admin/stats
-//
-// SECURITY: an ADMIN (principal) receives stats scoped to THEIR OWN school
-// only (cross-tenant PII isolation). SUPERADMIN receives platform-wide stats.
-export async function GET(_req: NextRequest) {
-  const auth = await requireAdminApi();
-  if (auth.response) return auth.response;
-  const user = auth.user;
+  const [totalSchools, activeSchools, classrooms, groups, totalUsers, admins, teachers, students, groupMessages] =
+    await Promise.all([
+      db.school.count(),
+      db.school.count({ where: { isActive: true } }),
+      db.classroom.count(),
+      db.subjectGroup.count(),
+      db.user.count(),
+      db.user.count({ where: { role: 'SCHOOL_ADMIN' } }),
+      db.user.count({ where: { role: 'TEACHER' } }),
+      db.user.count({ where: { role: 'STUDENT' } }),
+      db.message.count(),
+          ])
 
-  // School scope for principals; null = unscoped (SUPERADMIN).
-  const scoped = user.role === "ADMIN";
-  const schoolId = scoped ? (user.schoolId ?? "__none__") : null;
-
-  const [
-    totalUsers,
-    totalStudents,
-    totalTeachers,
-    totalAdmins,
-    totalClasses,
-    totalMessages,
-    totalAssignments,
-    totalSampleQuestions,
-    totalGrades,
-    totalBehaviors,
-    recentUsers,
-    recentClasses,
-  ] = await Promise.all([
-    db.user.count({ where: scoped ? { schoolId } : undefined }),
-    db.user.count({ where: scoped ? { schoolId, role: "STUDENT" } : { role: "STUDENT" } }),
-    db.user.count({ where: scoped ? { schoolId, role: "TEACHER" } : { role: "TEACHER" } }),
-    db.user.count({ where: scoped ? { schoolId, role: "ADMIN" } : { role: "ADMIN" } }),
-    db.classRoom.count({ where: scoped ? { schoolId } : undefined }),
-    db.message.count({ where: scoped ? { class: { schoolId } } : undefined }),
-    db.assignment.count({ where: scoped ? { class: { schoolId } } : undefined }),
-    db.sampleQuestion.count({ where: scoped ? { class: { schoolId } } : undefined }),
-    db.grade.count({ where: scoped ? { class: { schoolId } } : undefined }),
-    db.behaviorMark.count({ where: scoped ? { class: { schoolId } } : undefined }),
-    db.user.findMany({
-      where: scoped ? { schoolId } : undefined,
-      orderBy: { createdAt: "desc" },
-      take: 5,
-      select: {
-        id: true,
-        username: true,
-        role: true,
-        fullName: true,
-        createdAt: true,
-      },
-    }),
-    db.classRoom.findMany({
-      where: scoped ? { schoolId } : undefined,
-      orderBy: { createdAt: "desc" },
-      take: 5,
-      select: {
-        id: true,
-        name: true,
-        gradeLevel: true,
-        createdAt: true,
-        _count: { select: { memberships: true } },
-      },
-    }),
-  ]);
+  // همه مدارس برای نمای آماری
+  const schoolsOverview = await db.school.findMany({
+    orderBy: { createdAt: 'desc' },
+    select: {
+      id: true,
+      name: true,
+      isActive: true,
+      _count: { select: { classrooms: true, users: true } },
+    },
+  })
 
   return NextResponse.json({
-    data: {
+    stats: {
+      totalSchools,
+      activeSchools,
+      classrooms,
+      groups,
       totalUsers,
-      totalStudents,
-      totalTeachers,
-      totalAdmins,
-      totalClasses,
-      totalMessages,
-      totalAssignments,
-      totalSampleQuestions,
-      totalGrades,
-      totalBehaviors,
-      recentUsers,
-      recentClasses,
+      admins,
+      teachers,
+      students,
+      messages: groupMessages,
     },
-  });
+    schoolsOverview,
+  })
 }

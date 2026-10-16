@@ -1,111 +1,146 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { redirect } from "next/navigation";
+import { SignJWT, jwtVerify } from 'jose'
+import { cookies } from 'next/headers'
 
-/**
- * Error classes thrown by the auth helpers below.
- *
- * In API routes you should catch these (or use the `apiRequire*` helpers) and
- * convert them to proper HTTP responses (401 / 403).
- *
- * In server components / pages, the helpers fall back to `redirect("/login")`
- * so the user is sent to the sign-in page automatically.
- */
-export class UnauthorizedError extends Error {
-  constructor(message = "Unauthorized") {
-    super(message);
-    this.name = "UnauthorizedError";
+export type Role = 'SUPER_ADMIN' | 'SCHOOL_ADMIN' | 'SCHOOL_VICE' | 'TEACHER' | 'STUDENT'
+
+export const APP_ROLES: Role[] = ['SCHOOL_ADMIN', 'SCHOOL_VICE', 'TEACHER', 'STUDENT']
+
+/** نقش‌های ستاد مدرسه — معاون مدرسه هم‌تراز ستاد در پیام‌رسان/کلاس آنلاین/گروه‌ها */
+export const STAFF_ROLES: Role[] = ['SCHOOL_ADMIN', 'SCHOOL_VICE', 'TEACHER']
+
+/** نقش‌هایی که می‌توانند به‌عنوان معلم گروه انتخاب شوند */
+export const TEACHER_ROLES: Role[] = ['TEACHER', 'SCHOOL_VICE']
+
+export interface SessionPayload {
+  uid: string
+  username: string
+  fullName: string
+  role: Role
+  schoolId: string | null
+  /** در حالت جعل هویت: شناسه مدیر کل اصلی */
+  impersonatedBy?: string
+}
+
+const COOKIE_NAME = 'daniar_session'
+const IMPERSONATE_COOKIE_NAME = 'daniar_imp'
+const SESSION_DAYS = 7
+const IMPERSONATION_HOURS = 2
+
+// SameSite=None + Secure تا نشست داخل iframe پیش‌نمایش زنده (مبدأ پلتفرم) هم کار کند؛
+// جبران محافظت Lax: گارد Sec-Fetch-Site در proxy.ts برای متدهای تغییردهنده
+// (Chrome/Firefox لوکال‌هاست را trustworthy می‌دانند و کوکی Secure روی http://localhost هم می‌پذیرند)
+const COOKIE_SAME_SITE = 'none' as const
+const COOKIE_SECURE = true
+
+function getSecret(): Uint8Array {
+  // محیط عملیاتی بدون کلید امن یا با کلید نمونه → بلافاصله متوقف می‌شود (هیچ‌گاه با کلید ثابت سرو نمی‌شود)
+  if (
+    process.env.NODE_ENV === 'production' &&
+    (!process.env.SESSION_SECRET ||
+      process.env.SESSION_SECRET === 'daniar-dev-secret-change-me-in-production' ||
+      process.env.SESSION_SECRET === 'please-change-this-secret-in-production')
+  ) {
+    throw new Error(
+      '[daniar] SESSION_SECRET تنظیم نشده یا هنوز مقدار نمونه است — در .env سرور با openssl rand -base64 32 مقدار امن بسازید',
+    )
+  }
+  const secret =
+    process.env.SESSION_SECRET ?? 'daniar-dev-secret-change-me-in-production'
+  return new TextEncoder().encode(secret)
+}
+
+export async function signSession(payload: SessionPayload): Promise<string> {
+  return new SignJWT({ ...payload })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime(`${SESSION_DAYS}d`)
+    .sign(getSecret())
+}
+
+export async function verifySessionToken(
+  token: string | undefined | null,
+): Promise<SessionPayload | null> {
+  if (!token) return null
+  try {
+    const { payload } = await jwtVerify(token, getSecret())
+    if (!payload.uid || !payload.role) return null
+    return {
+      uid: String(payload.uid),
+      username: String(payload.username ?? ''),
+      fullName: String(payload.fullName ?? ''),
+      role: payload.role as Role,
+      schoolId: (payload.schoolId as string | null) ?? null,
+      ...(payload.impBy ? { impersonatedBy: String(payload.impBy) } : {}),
+    }
+  } catch {
+    return null
   }
 }
 
-export class ForbiddenError extends Error {
-  constructor(message = "Forbidden") {
-    super(message);
-    this.name = "ForbiddenError";
-  }
+/** خواندن نشست از کوکی — در صورت جعل هویت، نشست کاربر هدف اولویت دارد */
+export async function getSession(): Promise<SessionPayload | null> {
+  const store = await cookies()
+  const imp = await verifySessionToken(store.get(IMPERSONATE_COOKIE_NAME)?.value)
+  if (imp) return imp
+  return verifySessionToken(store.get(COOKIE_NAME)?.value)
 }
 
-export async function getSession() {
-  return getServerSession(authOptions);
+export async function setSessionCookie(payload: SessionPayload) {
+  const token = await signSession(payload)
+  const store = await cookies()
+  store.set(COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: COOKIE_SAME_SITE,
+    secure: COOKIE_SECURE,
+    maxAge: SESSION_DAYS * 24 * 60 * 60,
+    path: '/',
+  })
 }
 
-export async function getCurrentUser() {
-  const session = await getSession();
-  return session?.user ?? null;
+export async function clearSessionCookie() {
+  const store = await cookies()
+  store.set(COOKIE_NAME, '', {
+    httpOnly: true,
+    sameSite: COOKIE_SAME_SITE,
+    secure: COOKIE_SECURE,
+    maxAge: 0,
+    path: '/',
+  })
 }
 
-/**
- * Returns the authenticated user.
- *
- * IMPORTANT for API routes: this function throws `UnauthorizedError` when there
- * is no session. It does NOT redirect. That way API consumers can catch the
- * error and return a clean `401` JSON response.
- *
- * If you need a server-component-style redirect instead, use
- * `requireAuthOrRedirect()` below.
- */
-export async function requireAuth() {
-  const session = await getSession();
-  if (!session?.user) {
-    throw new UnauthorizedError();
-  }
-  return session.user;
+// ─── جعل هویت (ورود مدیر کل به‌جای کاربر) ───
+
+export async function setImpersonationCookie(payload: SessionPayload) {
+  const token = await new SignJWT({ ...payload, impBy: payload.impersonatedBy ?? '' })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime(`${IMPERSONATION_HOURS}h`)
+    .sign(getSecret())
+  const store = await cookies()
+  store.set(IMPERSONATE_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: COOKIE_SAME_SITE,
+    secure: COOKIE_SECURE,
+    maxAge: IMPERSONATION_HOURS * 60 * 60,
+    path: '/',
+  })
 }
 
-export type Role = "STUDENT" | "TEACHER" | "ADMIN" | "SUPERADMIN";
-
-/**
- * SUPERADMIN satisfies ANY role check — they are a superset of every role.
- * e.g. `requireRole("ADMIN")` passes for a SUPERADMIN.
- */
-export async function requireRole(role: "STUDENT" | "TEACHER" | "ADMIN") {
-  const user = await requireAuth();
-  if (user.role !== role && user.role !== "SUPERADMIN") {
-    throw new ForbiddenError(`Requires role ${role}`);
-  }
-  return user;
+export async function clearImpersonationCookie() {
+  const store = await cookies()
+  store.set(IMPERSONATE_COOKIE_NAME, '', {
+    httpOnly: true,
+    sameSite: COOKIE_SAME_SITE,
+    secure: COOKIE_SECURE,
+    maxAge: 0,
+    path: '/',
+  })
 }
 
-export async function requireAdmin() {
-  return requireRole("ADMIN");
+export async function getImpersonation(): Promise<SessionPayload | null> {
+  const store = await cookies()
+  return verifySessionToken(store.get(IMPERSONATE_COOKIE_NAME)?.value)
 }
 
-export async function requireTeacher() {
-  return requireRole("TEACHER");
-}
-
-export async function requireStudent() {
-  return requireRole("STUDENT");
-}
-
-/* ------------------------------------------------------------------ */
-/* Server-component friendly variants (redirect on failure)           */
-/* ------------------------------------------------------------------ */
-
-export async function requireAuthOrRedirect() {
-  const user = await getCurrentUser();
-  if (!user) {
-    redirect("/login");
-  }
-  return user;
-}
-
-export async function requireRoleOrRedirect(role: "STUDENT" | "TEACHER" | "ADMIN") {
-  const user = await requireAuthOrRedirect();
-  if (user.role !== role && user.role !== "SUPERADMIN") {
-    redirect("/");
-  }
-  return user;
-}
-
-/**
- * SUPERADMIN-only check (server component variant). Redirects to
- * /superadmin/login if not a super admin.
- */
-export async function requireSuperAdminOrRedirect() {
-  const user = await requireAuthOrRedirect();
-  if (user.role !== "SUPERADMIN") {
-    redirect("/superadmin/login");
-  }
-  return user;
-}
+export const SESSION_COOKIE_NAME = COOKIE_NAME
+export const IMPERSONATE_COOKIE = IMPERSONATE_COOKIE_NAME

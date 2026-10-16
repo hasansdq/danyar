@@ -21,7 +21,13 @@ function Switch({
       <SwitchPrimitive.Thumb
         data-slot="switch-thumb"
         className={cn(
-          "bg-background dark:data-[state=unchecked]:bg-foreground dark:data-[state=checked]:bg-primary-foreground pointer-events-none block size-4 rounded-full ring-0 transition-transform data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0"
+          "bg-background dark:data-[state=unchecked]:bg-foreground dark:data-[state=checked]:bg-primary-foreground pointer-events-none block size-4 rounded-full ring-0 transition-transform data-[state=unchecked]:translate-x-0",
+          // LTR (default): checked → thumb slides to the right edge
+          "ltr:data-[state=checked]:translate-x-[calc(100%-2px)]",
+          // RTL: flex places the thumb at the inline-start (right) edge when unchecked,
+          // so when checked it must slide LEFT (translateX is physical and never flips
+          // with direction) — otherwise the thumb escapes the track.
+          "rtl:data-[state=checked]:-translate-x-[calc(100%-2px)]"
         )}
       />
     </SwitchPrimitive.Root>

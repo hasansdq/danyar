@@ -1,124 +1,94 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { db } from "@/lib/db";
-import { getApiUser } from "@/lib/api-auth";
-import { apiHandler, notFound } from "@/lib/api-utils";
-import { assertModule } from "@/lib/module-check";
-import { verifyMembership } from "@/lib/membership";
+import { NextRequest, NextResponse } from 'next/server'
+import { db } from '@/lib/db'
+import { requireAppRole, jsonError } from '@/lib/api-auth'
+import { serializeMessage } from '@/lib/messaging'
+import { getAccessibleGroup, canDirectMessage } from '@/lib/chat-access'
+import { notifySocket, roomForGroup, roomForUser } from '@/lib/notify'
 
-export const dynamic = "force-dynamic";
+type Params = { params: Promise<{ id: string }> }
+
+function roomsForMessage(m: {
+  kind: string
+  subjectGroupId: string | null
+  senderId: string
+  recipientId: string | null
+}): string[] {
+  if (m.kind === 'GROUP' && m.subjectGroupId) return [roomForGroup(m.subjectGroupId)]
+  const rooms = [roomForUser(m.senderId)]
+  if (m.recipientId) rooms.push(roomForUser(m.recipientId))
+  return rooms
+}
 
 /**
- * POST /api/messages/[id]/pin — set or clear the pin on a message.
- *
- * Auth: TEACHER / ADMIN / SUPERADMIN. Module gate: "class_chat"
- * (pinning is part of the class-chat feature set).
- *
- * School-scoped for ADMIN: the principal must own the school that owns
- * the message's class. TEACHERs must be a member of the class
- * (ClassMembership — any role). SUPERADMIN bypasses.
- *
- * Body: `{ pin: true | false }`.
- *   - `pin: true`  → sets `pinnedById` + `pinnedAt = now()` on the Message.
- *   - `pin: false` → clears `pinnedById` + `pinnedAt` (sets both to null).
- *
- * Idempotent — pinning an already-pinned message just refreshes the
- * timestamp + pinnedById. Un-pinning an already-unpinned message is a
- * no-op.
- *
- * Returns `{ data: { id, pinned: boolean } }` where `pinned` reflects
- * the post-write state (true after pin, false after unpin).
+ * سنجاق / برداشتن سنجاق پیام
+ * فقط نقش معلم یا مدیر مدرسه — با بررسی دسترسی واقعی به گفتگوی پیام:
+ * گروه: معلم فقط در صورت انتساب واقعی به همان گروه، مدیر فقط برای مدرسه خودش
+ * خصوصی: فقط طرفین گفتگو
  */
-export const POST = apiHandler<{ id: string }>(
-  async (req: NextRequest, ctx) => {
-    const user = await getApiUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+export async function POST(req: NextRequest, { params }: Params) {
+  const res = await requireAppRole()
+  if ('response' in res) return res.response
+  const session = res.session
+  const { id } = await params
+
+  if (session.role !== 'TEACHER' && session.role !== 'SCHOOL_ADMIN') {
+    return jsonError('سنجاق کردن پیام فقط برای معلم و مدیر مدرسه مجاز است', 403)
+  }
+
+  const message = await db.message.findUnique({
+    where: { id },
+    include: {
+      subjectGroup: { select: { classroom: { select: { schoolId: true } } } },
+    },
+  })
+  if (!message) return jsonError('پیام یافت نشد', 404)
+  if (message.deletedAt) return jsonError('پیام حذف‌شده قابل سنجاق نیست', 400)
+
+  // بررسی دسترسی واقعی به گفتگوی پیام
+  if (message.kind === 'GROUP' && message.subjectGroupId) {
+    const group = await getAccessibleGroup(session, message.subjectGroupId)
+    if (!group) return jsonError('پیام یافت نشد یا دسترسی ندارید', 404)
+  } else if (message.kind === 'DIRECT') {
+    if (message.senderId !== session.uid && message.recipientId !== session.uid) {
+      return jsonError('پیام یافت نشد یا دسترسی ندارید', 404)
     }
-    if (
-      user.role !== "TEACHER" &&
-      user.role !== "ADMIN" &&
-      user.role !== "SUPERADMIN"
-    ) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    // ماتریس گفتگوی خصوصی نیز باید معتبر بماند
+    const peerId =
+      message.senderId === session.uid ? message.recipientId : message.senderId
+    if (peerId) {
+      const allowed = await canDirectMessage(session, peerId)
+      if (!allowed.ok) return jsonError('دسترسی به این گفتگو برقرار نیست', 403)
     }
-    await assertModule(user.role, "class_chat");
+  } else {
+    return jsonError('پیام یافت نشد', 404)
+  }
 
-    const { id } = await ctx.params;
-    if (!id) return notFound("شناسه پیام الزامی است");
+  const body = await req.json().catch(() => null)
+  const pinned = body?.pinned !== false // پیش‌فرض: سنجاق
 
-    // Parse body — tolerate empty body (default to pin=true).
-    let body: any = {};
-    try {
-      const text = await req.text();
-      if (text) body = JSON.parse(text);
-    } catch {
-      // fall through — treat as empty body
-    }
-    const pin = body?.pin === undefined ? true : Boolean(body.pin);
+  if (pinned && message.pinnedAt) {
+    // از قبل سنجاق‌شده — بدون تغییر همان پیام را برگردان
+    const s = await serializeMessage(id)
+    return NextResponse.json({ message: s, unchanged: true })
+  }
+  if (!pinned && !message.pinnedAt) {
+    const s = await serializeMessage(id)
+    return NextResponse.json({ message: s, unchanged: true })
+  }
 
-    // Load the message so we know its classId + verify it's not deleted.
-    const message = await db.message.findUnique({
-      where: { id },
-      select: { id: true, classId: true, deletedAt: true },
-    });
-    if (!message) return notFound("پیام یافت نشد");
-    if (message.deletedAt) {
-      return NextResponse.json(
-        { error: "این پیام حذف شده و قابل سنجاق نیست" },
-        { status: 400 },
-      );
-    }
+  await db.message.update({
+    where: { id },
+    data: pinned
+      ? { pinnedAt: new Date(), pinnedById: session.uid }
+      : { pinnedAt: null, pinnedById: null },
+  })
 
-    // Access control.
-    const cls = await db.classRoom.findUnique({
-      where: { id: message.classId },
-      select: { schoolId: true },
-    });
-    const isPrincipalOfClass =
-      user.role === "ADMIN" &&
-      !!user.schoolId &&
-      cls?.schoolId === user.schoolId;
-    const isMember = !!(await verifyMembership(user.id, message.classId));
-    const isSuperAdmin = user.role === "SUPERADMIN";
+  const serialized = await serializeMessage(id)
+  await notifySocket({
+    rooms: roomsForMessage(message),
+    event: 'message:updated',
+    data: serialized,
+  })
 
-    if (!isSuperAdmin && !isPrincipalOfClass && !isMember) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-
-    if (pin) {
-      const updated = await db.message.update({
-        where: { id },
-        data: {
-          pinnedById: user.id,
-          pinnedAt: new Date(),
-        },
-        select: { id: true, pinnedById: true, pinnedAt: true },
-      });
-      return NextResponse.json({
-        data: {
-          id: updated.id,
-          pinned: true,
-          pinnedById: updated.pinnedById,
-          pinnedAt: updated.pinnedAt?.toISOString() ?? null,
-        },
-      });
-    }
-
-    const updated = await db.message.update({
-      where: { id },
-      data: {
-        pinnedById: null,
-        pinnedAt: null,
-      },
-      select: { id: true, pinnedById: true, pinnedAt: true },
-    });
-    return NextResponse.json({
-      data: {
-        id: updated.id,
-        pinned: false,
-        pinnedById: null,
-        pinnedAt: null,
-      },
-    });
-  },
-);
+  return NextResponse.json({ message: serialized })
+}

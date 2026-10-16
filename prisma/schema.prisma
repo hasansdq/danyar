@@ -1,6 +1,3 @@
-// Educational Messenger - Custom Teacher Messenger
-// Roles: STUDENT, TEACHER, ADMIN
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,628 +7,917 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ─── Roles: SUPER_ADMIN | SCHOOL_ADMIN | TEACHER | STUDENT ───
+
 model User {
-  id           String         @id @default(cuid())
-  username     String         @unique
-  password     String // hashed via bcrypt
-  role         String         @default("STUDENT") // STUDENT | TEACHER | ADMIN | SUPERADMIN
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
   fullName     String
-  phone        String?
-  avatarColor String?        // deterministic color for avatar bubble
-  avatar      String?        // optional profile picture URL (/uploads/...)
-  schoolId     String?       // which school this user belongs to (null for SUPERADMIN + legacy users)
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
-
-  school       School?  @relation(fields: [schoolId], references: [id], onDelete: SetNull)
-  principalOf  School?  @relation("SchoolPrincipal")
-  memberships  ClassMembership[]
-  messages     Message[]
-  deletedMessages Message[] @relation("MessageDeletedBy")
-  pinnedMessages Message[]  @relation("MessagePinnedBy")
-  messageReads     MessageRead[]
-  messageSaves     MessageSaved[]
-  aiConversations  AIConversation[]
-  pushSubscriptions PushSubscription[]
-  notifications     Notification[]
-  assignments  Assignment[]
-  assignmentSubmissions AssignmentSubmission[] @relation("AssignmentSubmissionStudent")
-  submissionUpdates AssignmentSubmission[] @relation("AssignmentSubmissionUpdater")
-  questions    SampleQuestion[]
-  gradesGiven  Grade[]
-  behaviorGiven BehaviorMark[]
-  gradesReceived Grade[]      @relation("GradeStudent")
-  behaviorReceived BehaviorMark[] @relation("BehaviorStudent")
-  pollsCreated Poll[]
-  pollVotes    PollVote[]
-  closedChats  ClassRoom[]   @relation("ChatClosedBy")
-  directChatsA DirectChat[] @relation("DirectChatUserA")
-  directChatsB DirectChat[] @relation("DirectChatUserB")
-  directMessages DirectMessage[]
-  deletedDirectMessages DirectMessage[] @relation("DirectMessageDeletedBy")
-  attendances Attendance[]
-  // Phase 35 — virtual classroom (online class) module.
-  classroomSessionsStarted ClassroomSession[] @relation("ClassroomSessionStartedBy")
-  classroomParticipations ClassroomParticipant[]
-}
-
-model ClassRoom {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  description String?
-  gradeLevel  String?  // e.g. "Grade 10", "پایه دهم"
-  chatClosed  Boolean  @default(false)
-  chatClosedAt DateTime?
-  chatClosedById String?
-  chatClosedBy User?  @relation("ChatClosedBy", fields: [chatClosedById], references: [id])
-  // Per-class file upload limits (set by teacher/admin).
-  fileUploadEnabled  Boolean  @default(true)
-  maxFileSizeMb      Int      @default(10) // 0 = no limit; otherwise MB cap
-  allowedFileTypes   String?  // JSON array of allowed type categories: ["image","pdf","video"]; null = all allowed
-  section     String?  // شعبه (e.g. "الف", "ب") — class section/branch
-  schoolId    String?  // which school this class belongs to
-  parentClassId String?  // if set, this ClassRoom is a "group" (chat) within the parent class
-  avatar      String?  // group profile picture URL
-  // Phase 35b — per-group streaming (online class) toggle. Default OFF —
-  // a TEACHER must explicitly enable it via the header icon before the FAB
-  // appears for any group member. Group-scoped: toggling one group doesn't
-  // affect others. Also gated by the school's `streamingEnabled` flag —
-  // when the school flag is OFF, this flag is ignored + streaming is fully
-  // disabled in the school.
-  streamingEnabled Boolean @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  school      School?  @relation(fields: [schoolId], references: [id], onDelete: SetNull)
-  parentClass ClassRoom? @relation("ClassGroups", fields: [parentClassId], references: [id], onDelete: Cascade)
-  groups      ClassRoom[] @relation("ClassGroups")
-  memberships ClassMembership[]
-  messages    Message[]
-  assignments Assignment[]
-  questions   SampleQuestion[]
-  grades      Grade[]
-  behaviors   BehaviorMark[]
-  polls       Poll[]
-  attendances Attendance[]
-  // Phase 35 — virtual classroom (online class) sessions hosted in this class.
-  classroomSessions ClassroomSession[]
-}
-
-model ClassMembership {
-  id        String   @id @default(cuid())
-  classId   String
-  userId    String
-  role      String   @default("STUDENT") // STUDENT | TEACHER
-  createdAt DateTime @default(now())
-
-  class     ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([classId, userId])
-  @@index([classId])
-  @@index([userId])
-}
-
-model Message {
-  id          String   @id @default(cuid())
-  classId     String
-  senderId    String
-  content     String
-  createdAt   DateTime @default(now())
-  // Announcement messages (sent by the principal) get a red animated border
-  // in the chat UI to distinguish them from regular messages.
-  isAnnouncement Boolean @default(false)
-  // Reply — the message this one is replying to (null = not a reply).
-  replyToId    String?
-  // Forward — the original message this was forwarded from (null = original).
-  forwardedFromId String?
-  // Edit — set when the message content was edited by the sender.
-  editedAt     DateTime?
-  // Linked assignment/sample-question (for "forward to chat" posts).
-  linkedAssignmentId    String?
-  linkedSampleQuestionId String?
-  // Soft-delete for the Telegram-style delete feature.
-  // Admin/teacher can delete any message anytime; students can delete
-  // their own message only within 12 hours of sending.
-  deletedAt   DateTime?
-  deletedById String?
-  deletedBy   User?    @relation("MessageDeletedBy", fields: [deletedById], references: [id])
-  // Pin (سنجاق) — set when a TEACHER/ADMIN/SUPERADMIN pins a message to
-  // the top of the chat for the whole class. `pinnedById` is the user who
-  // pinned; `pinnedAt` is when. Both are nullable (null = not pinned).
-  pinnedById  String?
-  pinnedAt    DateTime?
-  pinnedBy    User?    @relation("MessagePinnedBy", fields: [pinnedById], references: [id], onDelete: SetNull)
-  // File attachment (PDF / image / video). Null for plain text messages.
-  fileUrl     String?  // public path: /uploads/<unique>.<ext>
-  fileName    String?  // original file name from the uploader
-  fileType    String?  // category: "image" | "pdf" | "video" | "file"
-  fileSize    Int?     // bytes
-  mimeType    String?  // e.g. image/png, application/pdf, video/mp4
-
-  class     ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
-  sender    User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
-  // Reply / forward self-relations.
-  replyTo      Message?  @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
-  replies       Message[] @relation("MessageReply")
-  forwardedFrom Message?  @relation("MessageForward", fields: [forwardedFromId], references: [id], onDelete: SetNull)
-  forwards      Message[] @relation("MessageForward")
-  linkedAssignment    Assignment?      @relation("MessageLinkedAssignment", fields: [linkedAssignmentId], references: [id], onDelete: SetNull)
-  linkedSampleQuestion SampleQuestion?  @relation("MessageLinkedSampleQuestion", fields: [linkedSampleQuestionId], references: [id], onDelete: SetNull)
-  // Read receipts — who has seen this message.
-  reads         MessageRead[]
-  // Saved/bookmarked messages — who has saved this message.
-  saves         MessageSaved[]
-
-  @@index([classId, createdAt])
-  @@index([deletedAt])
-  @@index([replyToId])
-}
-
-// Saved/bookmarked messages — one row per (message, user) who saved it.
-model MessageSaved {
-  id          String   @id @default(cuid())
-  messageId   String
-  userId      String
-  savedAt     DateTime @default(now())
-
-  message     Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([messageId, userId])
-  @@index([messageId])
-  @@index([userId])
-}
-
-// Read receipts — one row per (message, user) who has seen it.
-model MessageRead {
-  id          String   @id @default(cuid())
-  messageId   String
-  userId      String
-  readAt      DateTime @default(now())
-
-  message     Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([messageId, userId])
-  @@index([messageId])
-  @@index([userId])
-}
-
-model Assignment {
-  id          String   @id @default(cuid())
-  classId     String
-  title       String
-  description String?
-  dueDate     DateTime?
-  fileName    String?
-  fileUrl     String?  // stored in /public/uploads
-  fileSize    Int?
-  createdAt   DateTime @default(now())
-  createdById String
-
-  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
-  createdBy   User      @relation(fields: [createdById], references: [id])
-  submissions AssignmentSubmission[]
-  linkedMessages Message[] @relation("MessageLinkedAssignment")
-
-  @@index([classId, createdAt])
-}
-
-// Per-student assignment status. One row per (assignment, student).
-// status: UNCHECKED (بررسی نشده) | DONE (انجام شده) | INCOMPLETE (ناقص) | NOT_DONE (انجام نشده)
-model AssignmentSubmission {
-  id           String   @id @default(cuid())
-  assignmentId String
-  studentId    String
-  status       String   @default("UNCHECKED") // UNCHECKED | DONE | INCOMPLETE | NOT_DONE
-  note         String?  // optional teacher note
-  updatedAt    DateTime @updatedAt
-  updatedById  String?
+  // تفکیک نام و نام خانوادگی (فرم‌های افزودن کاربر) — fullName همیشه ترکیب این دو نگه داشته می‌شود
+  firstName    String?
+  lastName     String?
+  role         String
+  // شماره تلفن یکتا در کل پلتفرم — قالب نرمال 09xxxxxxxxx؛ برای ورود پیامکی
+  phone        String?  @unique
+  schoolId     String?
+  school       School?  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  isActive     Boolean  @default(true)
+  // تصویر پروفایل (فایل ذخیره‌شده روی دیسک)
+  avatarKey    String?
+  avatarMime   String?
   createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  student      User      @relation("AssignmentSubmissionStudent", fields: [studentId], references: [id])
-  updatedBy    User?     @relation("AssignmentSubmissionUpdater", fields: [updatedById], references: [id])
-
-  @@unique([assignmentId, studentId])
-  @@index([assignmentId])
-  @@index([studentId])
+  enrollments            ClassroomEnrollment[]
+  teachingAssignments    TeachingAssignment[]
+  sentMessages           Message[]                @relation("msgSender")
+  receivedMessages       Message[]                @relation("msgRecipient")
+  pinnedMessages         Message[]                @relation("msgPinnedBy")
+  groupMemberOverrides   GroupMemberOverride[]
+  groupReadStates        GroupReadState[]
+  uploads                Upload[]
+  createdAssignments     Assignment[]             @relation("assignmentCreator")
+  submissions            AssignmentSubmission[]   @relation("submissionStudent")
+  notifications          Notification[]
+  notificationPref       NotificationPref?
+  mutedChats             MutedChat[]
+  pushSubscriptions      PushSubscription[]
+  hostedLiveSessions     LiveSession[]            @relation("liveSessionHost")
+  endedLiveSessions      LiveSession[]            @relation("liveSessionEnder")
+  liveChatMessages       LiveChatMessage[]        @relation("liveChatSender")
+  liveParticipantLogs    LiveParticipantLog[]     @relation("liveParticipantLog")
+  aiConversations        AiConversation[]
+  aiUsageLogs            AiUsageLog[]
+  attendanceSessions     AttendanceSession[]      @relation("attendanceSessionCreator")
+  attendanceRecords      AttendanceRecord[]       @relation("attendanceStudent")
+  attendanceEdits        AttendanceEditLog[]      @relation("attendanceEditor")
+  sampleqCreated         SampleQuestion[]         @relation("sampleqCreator")
+  impersonationsStarted  ImpersonationLog[]       @relation("impersonationAdmin")
+  impersonationsTargeted ImpersonationLog[]       @relation("impersonationTarget")
+  bulkSends              BulkSendLog[]            @relation("bulkSendLog")
+  sampleqBookmarks       SampleQuestionBookmark[] @relation("sampleqBookmarker")
+  classEventsCreated     ClassEvent[]             @relation("classEventCreator")
 }
 
-model SampleQuestion {
-  id          String   @id @default(cuid())
-  classId     String
-  title       String
-  description String?
-  fileName    String?
-  fileUrl     String?
-  createdAt   DateTime @default(now())
-  createdById String
-
-  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
-  createdBy   User      @relation(fields: [createdById], references: [id])
-  linkedMessages Message[] @relation("MessageLinkedSampleQuestion")
-
-  @@index([classId, createdAt])
-}
-
-model Grade {
-  id          String   @id @default(cuid())
-  classId     String
-  studentId   String
-  title       String
-  score       Float
-  maxScore    Float    @default(20)
-  createdAt   DateTime @default(now())
-  createdById String
-
-  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
-  student     User      @relation("GradeStudent", fields: [studentId], references: [id])
-  createdBy   User      @relation(fields: [createdById], references: [id])
-
-  @@index([classId, studentId])
-  @@index([studentId, createdAt])
-}
-
-model BehaviorMark {
-  id          String   @id @default(cuid())
-  classId     String
-  studentId   String
-  type        String   // POSITIVE | NEGATIVE
-  reason      String
-  value       Int      @default(1) // +1 / -1
-  createdAt   DateTime @default(now())
-  createdById String
-
-  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
-  student     User      @relation("BehaviorStudent", fields: [studentId], references: [id])
-  createdBy   User      @relation(fields: [createdById], references: [id])
-
-  @@index([classId, studentId])
-  @@index([studentId, createdAt])
-}
-
-// Telegram-style polls inside class chat.
-// `options` is a JSON-encoded string array (SQLite has no native list type).
-model Poll {
-  id          String   @id @default(cuid())
-  classId     String
-  question    String
-  options     String   // JSON: ["گزینه ۱", "گزینه ۲", ...]
-  multipleChoice Boolean @default(false)
-  createdAt   DateTime @default(now())
-  createdById String
-  closedAt    DateTime?
-
-  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
-  createdBy   User      @relation(fields: [createdById], references: [id])
-  votes       PollVote[]
-
-  @@index([classId, createdAt])
-}
-
-model PollVote {
-  id          String   @id @default(cuid())
-  pollId      String
-  userId      String
-  optionIndex Int
-  createdAt   DateTime @default(now())
-
-  poll        Poll @relation(fields: [pollId], references: [id], onDelete: Cascade)
-  user        User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([pollId, userId, optionIndex])
-  @@index([pollId, optionIndex])
-}
-
-// Attendance tracking — one row per (class, student, date, period).
-// `date` is stored as a Jalali (Persian) calendar string "YYYY-MM-DD"
-// (e.g. "1403-07-15"). `period` is the class period (1..4). `present` is
-// true when the student was in class. `violations` is an optional JSON
-// array of Persian violation descriptions, e.g.
-//   ["تأخیر", "بی‌نظمی"]
-// Stored as a String because SQLite has no native list/array type.
-model Attendance {
-  id         String   @id @default(cuid())
-  classId    String
-  userId     String
-  date       String   // Jalali "YYYY-MM-DD"
-  period     Int      // 1..4
-  present    Boolean  @default(true)
-  violations String?  // JSON array of Persian strings, nullable
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  class      ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([classId, userId, date, period])
-  @@index([classId, date])
-  @@index([userId, date])
-  @@index([date])
-}
-
-// Modular feature permissions per role. The SUPERADMIN toggles these to
-// enable/disable capabilities for STUDENT / TEACHER / ADMIN roles.
-model RolePermission {
-  id         String   @id @default(cuid())
-  role       String   // STUDENT | TEACHER | ADMIN
-  featureKey String   // e.g. "chat", "create_assignment", "manage_users"
-  enabled    Boolean  @default(true)
-  updatedAt  DateTime @updatedAt
+// فایل آپلودشده که هنوز به پیامی متصل نشده (مرحله میانی)
+model Upload {
+  key        String   @id
+  name       String
+  mime       String
+  size       Int
+  type       String // IMAGE | AUDIO | VIDEO | FILE
+  uploaderId String
+  // مدرسه مالک رسانه — از مدرسه آپلودکننده در لحظه آپلود ثبت می‌شود؛
+  // آپلود مدیر کل (بدون مدرسه) null می‌ماند
+  schoolId   String?
+  // تعداد دریافت کامل فایل (هر پاسخ ۲۰۰ بدون Range یک شمارش)
+  downloadCount Int   @default(0)
   createdAt  DateTime @default(now())
 
-  @@unique([role, featureKey])
-  @@index([role])
+  uploader User     @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+  school   School?  @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+
+  @@index([schoolId])
+  @@index([createdAt])
 }
 
-// Schools — managed by SUPERADMIN. Each school has a principal (an ADMIN user),
-// teachers, and students. Classes belong to a school.
 model School {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  address     String?
-  principalId String?  @unique // the ADMIN user who is the principal of this school
-  // Direct-chat (DM) permission toggles — managed by the principal.
-  // principal↔teacher is ALWAYS enabled (no toggle).
-  dmTeacherStudent   Boolean  @default(true)  // معلم ↔ دانش‌آموز
-  dmStudentStudent   Boolean  @default(true)  // دانش‌آموز ↔ دانش‌آموز
-  dmPrincipalStudent Boolean  @default(true)  // مدیر ↔ دانش‌آموز
-  // Phase 35b — per-school streaming (online class) toggle. Default ON so
-  // existing schools keep the feature available. When OFF, streaming is
-  // fully disabled in this school — the FAB + header toggle are hidden from
-  // all groups + POST /api/classroom/start returns 403. Managed by the
-  // SUPERADMIN in /superadmin/schools/[id].
-  streamingEnabled  Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  principal   User?   @relation("SchoolPrincipal", fields: [principalId], references: [id], onDelete: SetNull)
-  members     User[]  // all users with schoolId = this school
-  classes     ClassRoom[]
-  directChats DirectChat[]
-}
-
-// Global site-wide settings managed by SUPERADMIN.
-// Each row is a key/value pair. `value` is a string; booleans stored as "true"/"false".
-model SiteSetting {
-  key       String   @id // e.g. "lazyLoading", "navigationProgress"
-  value     String   // e.g. "true" / "false"
+  id        String   @id @default(cuid())
+  name      String
+  isActive  Boolean  @default(true)
+  // پرچم‌های امکانات هر مدرسه (JSON): chat, dm, assignments, onlineClass, attendance, sampleq
+  features  String   @default("{\"chat\":true,\"dm\":true,\"assignments\":true,\"onlineClass\":true,\"attendance\":true,\"sampleq\":true}")
+  createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  users           User[]
+  classrooms      Classroom[]
+  aiSetting       AiSchoolSetting?
+  sampleQuestions SampleQuestion[]
+  classEvents     ClassEvent[]
+  uploads         Upload[]
+  // گروه‌های عمومی مدرسه (همکاران/عمومی/پایه) — بدون کلاس مشخص
+  publicGroups    SubjectGroup[]
+  // سهمیه کل آپلود مدرسه بر حسب گیگابایت — 0 یعنی نامحدود
+  mediaQuotaGB    Float    @default(0)
+  // سقف افراد هم‌زمان هر جلسه در این مدرسه (معلم نیز جزو ظرفیت) —
+  // null = بدون سقف اختصاصی مدرسه (سقف جهانی LIVE_MAX_PARTICIPANTS اعمال می‌شود).
+  // سقف نرم‌افزاری ورود است؛ تضمین توان سخت‌افزاری برای این تعداد کاربر نیست.
+  // ظرفیت اختصاصی هر کلاس (Classroom.capacity) هرگز نمی‌تواند از آن بیشتر شود.
+  liveMaxParticipants Int?
+  // حداکثر تعداد جلسات هم‌زمان این مدرسه — null = نامحدود (هر کلاس همچنان فقط یک جلسه)
+  liveMaxConcurrent   Int?
 }
 
-// Direct (1:1) private chats between two users. Scoped to a school for
-// permission checks. The pair is stored canonically: userAId < userBId (by
-// cuid string sort) so the unique constraint dedupes regardless of who
-// initiated.
-model DirectChat {
-  id           String   @id @default(cuid())
-  userAId      String   // the "smaller" cuid
-  userBId      String   // the "larger" cuid
-  schoolId     String?  // the school both users belong to (for DM-permission checks)
-  createdAt    DateTime @default(now())
-  lastMessageAt DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+model Classroom {
+  id             String   @id @default(cuid())
+  name           String
+  schoolId       String
+  school         School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // پایه تحصیلی کلاس (از GRADE_OPTIONS) — همه دانش‌آموزان کلاس همین پایه را می‌گیرند؛
+  // مبنای گروه‌های پایه‌ای پیام‌رسان (مثلاً «همه پایه هفتمی‌ها»)
+  grade          String?
+  // گفتگوی خصوصی بین هم‌کلاسی‌ها (پیش‌فرض غیرفعال؛ مدیر مدرسه فعال می‌کند)
+  allowStudentDm Boolean  @default(false)
+  // ظرفیت کلاس آنلاین این کلاس — null = سقف سراسری LIVE_MAX_PARTICIPANTS
+  // (تعیین از پنل مدیر کل؛ حداکثر شرکت‌کنندگان هم‌زمان جلسات همین کلاس)
+  capacity       Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  userA        User   @relation("DirectChatUserA", fields: [userAId], references: [id], onDelete: Cascade)
-  userB        User   @relation("DirectChatUserB", fields: [userBId], references: [id], onDelete: Cascade)
-  school       School? @relation(fields: [schoolId], references: [id], onDelete: SetNull)
-  messages     DirectMessage[]
+  subjectGroups      SubjectGroup[]
+  enrollments        ClassroomEnrollment[]
+  liveSessions       LiveSession[]
+  attendanceSessions AttendanceSession[]
+  sampleQuestions    SampleQuestionClass[]
+  classEvents        ClassEvent[]
 
-  @@unique([userAId, userBId])
-  @@index([userAId])
-  @@index([userBId])
+  @@unique([schoolId, name])
+}
+
+// گروه پیام‌رسانی — دو نوع:
+// ۱) گروه درسی کلاس (scope=CLASS، classroomId مشخص، مثلاً «ریاضی هفتم۱»)
+// ۲) گروه عمومی مدرسه (scope=SCHOOL_STAFF|SCHOOL_ALL|GRADE، بدون کلاس؛ schoolId مالک است)
+model SubjectGroup {
+  id              String     @id @default(cuid())
+  name            String
+  // برای گروه‌های عمومی مدرسه null است
+  classroomId     String?
+  classroom       Classroom? @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  // مدرسه مالک — فقط برای گروه‌های عمومی (scope != CLASS) ثبت می‌شود
+  schoolId        String?
+  school          School?    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // CLASS | SCHOOL_STAFF (همکاران) | SCHOOL_ALL (عمومی) | GRADE (پایه)
+  scope           String     @default("CLASS")
+  // پایه گروه — فقط برای scope=GRADE (از GRADE_OPTIONS)
+  grade           String?
+  // بایگانی: فقط‌خواندنی می‌شود و از گفتگوهای فعال حذف می‌شود
+  archivedAt      DateTime?
+  // قفل برای دانش‌آموزان: گروه مخفی/حذف نمی‌شود و بقیه اعضا عادی پیام می‌فرستند؛
+  // فقط دانش‌آموز ارسال پیام/فایل برایش بسته است (مشاهده آزاد است)
+  lockedForStudents Boolean @default(false)
+  // مجوز ارسال پیام: ALL | STAFF (معلم و مدیر) | ADMINS (فقط مدیر مدرسه)
+  messagePolicy   String     @default("ALL")
+  // تصویر پروفایل گروه (اختیاری) — از سیستم آپلود سراسری
+  avatarKey       String?
+  avatarMime      String?
+  avatarUpdatedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  teachingAssignments TeachingAssignment[]
+  messages            Message[]
+  memberOverrides     GroupMemberOverride[]
+  readStates          GroupReadState[]
+  assignments         Assignment[]
+  liveAnnouncements   LiveSession[]         @relation("liveSessionNotify")
+
+  @@unique([classroomId, name])
   @@index([schoolId])
 }
 
-// Messages in a direct chat. Mirrors the Message model structure (content +
-// optional file attachment + soft-delete).
-model DirectMessage {
+// ثبت دانش‌آموز در کلاس → عضویت خودکار در همه گروه‌های درسی آن کلاس
+model ClassroomEnrollment {
   id          String   @id @default(cuid())
-  chatId      String
-  senderId    String
-  content     String
-  createdAt   DateTime @default(now())
-  // Read receipt — set when the recipient opens the chat (marks all earlier
-  // messages from the other user as read). Null = unread (sender sees single ✓).
-  readAt      DateTime?
-  // Soft-delete (same rules as class messages: admin/teacher anytime within
-  // their scope; sender within 12h — but for DMs, "teacher" rules don't apply
-  // the same way; keep it simple: sender can delete own within 12h; the other
-  // user can delete any in their DM; SUPERADMIN anytime).
-  deletedAt   DateTime?
-  deletedById String?
-  deletedBy   User?    @relation("DirectMessageDeletedBy", fields: [deletedById], references: [id])
-  // File attachment (image / pdf / video), same shape as Message.
-  fileUrl     String?
-  fileName    String?
-  fileType    String?  // "image" | "pdf" | "video" | "file"
-  fileSize    Int?
-  mimeType    String?
-
-  chat        DirectChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  sender      User      @relation(fields: [senderId], references: [id], onDelete: Cascade)
-
-  @@index([chatId, createdAt])
-  @@index([deletedAt])
-}
-
-// AI assistant conversation history — stores each message exchanged
-// between a user (principal/superadmin) and the AI assistant.
-model AIConversation {
-  id          String   @id @default(cuid())
-  userId      String
-  role        String   // "user" | "assistant"
-  content     String
-  actionJson  String?  // JSON string of action data (for assistant messages with actions)
+  studentId   String
+  classroomId String
   createdAt   DateTime @default(now())
 
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  student   User      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
 
-  @@index([userId, createdAt])
+  @@unique([studentId, classroomId])
 }
 
-// Push notification subscriptions — one per device/browser.
-// A user can have multiple subscriptions (phone, desktop, etc.).
-model PushSubscription {
-  id          String   @id @default(cuid())
-  userId      String
-  endpoint    String   @unique // the browser push endpoint URL
-  p256dh      String   // base64-encoded ECDH public key
-  auth        String   // base64-encoded auth secret
-  userAgent   String?  // browser/device identification
-  createdAt   DateTime @default(now())
+// انتساب معلم به یک گروه درسی مشخص
+model TeachingAssignment {
+  id             String   @id @default(cuid())
+  teacherId      String
+  subjectGroupId String
+  createdAt      DateTime @default(now())
 
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teacher      User         @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  subjectGroup SubjectGroup @relation(fields: [subjectGroupId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
+  @@unique([teacherId, subjectGroupId])
 }
 
-// In-app notification records — tracks each notification sent to a user.
+// استثناهای عضویت گروه: حذف دانش‌آموز ثبت‌نام‌شده یا افزودن دانش‌آموز دیگر
+model GroupMemberOverride {
+  id             String   @id @default(cuid())
+  subjectGroupId String
+  userId         String
+  action         String // ADD | REMOVE
+  createdAt      DateTime @default(now())
+
+  subjectGroup SubjectGroup @relation(fields: [subjectGroupId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectGroupId, userId])
+}
+
+// آخرین زمان خواندن هر کاربر در هر گروه (برای شمارنده نخوانده)
+model GroupReadState {
+  id             String   @id @default(cuid())
+  userId         String
+  subjectGroupId String
+  lastReadAt     DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subjectGroup SubjectGroup @relation(fields: [subjectGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, subjectGroupId])
+}
+
+// پیام یکپارچه: گروهی (GROUP) و خصوصی (DIRECT)
+model Message {
+  id             String        @id @default(cuid())
+  kind           String // GROUP | DIRECT
+  subjectGroupId String?
+  subjectGroup   SubjectGroup? @relation(fields: [subjectGroupId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User          @relation("msgSender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipientId    String? // فقط DIRECT: طرف مقابل
+  recipient      User?         @relation("msgRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  type           String  @default("TEXT") // TEXT | IMAGE | AUDIO | VIDEO | FILE | ANNOUNCEMENT
+  body           String  @default("")
+  // پیوست (تصویر/صوت/ویدئو/فایل)
+  attachmentName String?
+  attachmentKey  String?
+  attachmentMime String?
+  attachmentSize Int?
+  // فراداده پیوست صوتی (پیام ویس): JSON مثل {"duration":12.4,"waveform":[0.2,...]}
+  attachmentMeta String?
+
+  // پاسخ به پیام
+  replyToId String?
+  replyTo   Message?  @relation("msgReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   Message[] @relation("msgReply")
+
+  // شناسه یکتای سمت کلاینت برای جلوگیری از ثبت تکراری پس از اتصال مجدد
+  clientId String? @unique
+
+  // اطلاعیه مدیر مدرسه
+  isAnnouncement Boolean @default(false)
+
+  // پیام خودکار «ثبت تکلیف» — پیوند به تکلیف مربوطه
+  assignmentId String?
+
+  // پیام دعوت خودکار «کلاس آنلاین» — پیوند به جلسه مربوطه
+  liveSessionId String?
+
+  // پیام خودکار «نمونه‌سؤال» — پیوند به نمونه‌سؤال مربوطه
+  sampleQuestionId String?
+
+  // هدایت پیام از گفتگوی دیگر — نام فرستنده اصلی برای نمایش
+  isForwarded       Boolean @default(false)
+  forwardedFromName String?
+
+  // سنجاق کردن پیام — فقط معلم منتسب یا مدیر مدرسه
+  pinnedAt   DateTime?
+  pinnedById String?
+  pinnedBy   User?     @relation("msgPinnedBy", fields: [pinnedById], references: [id], onDelete: SetNull)
+
+  editedAt  DateTime?
+  deletedAt DateTime?
+  // وضعیت خواندن در گفتگوی خصوصی (زمان خواندن توسط گیرنده)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([subjectGroupId, createdAt])
+  @@index([senderId, recipientId, createdAt])
+  @@index([recipientId, readAt])
+  @@index([assignmentId])
+  @@index([liveSessionId])
+  @@index([sampleQuestionId])
+  @@index([subjectGroupId, pinnedAt])
+}
+
+// ─── کلاس آنلاین صوتی و تصویری (مرحله ۵) ───
+
+// جلسه زنده — همیشه متعلق به یک کلاس مشخص است (به گروه درسی وابسته نیست)
+// notifyGroup فقط برای اطلاع‌رسانی (پیام دعوت خودکار در آن گروه منتشر می‌شود)
+model LiveSession {
+  id            String        @id @default(cuid())
+  classroomId   String
+  classroom     Classroom     @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  hostId        String
+  host          User          @relation("liveSessionHost", fields: [hostId], references: [id], onDelete: Cascade)
+  notifyGroupId String?
+  notifyGroup   SubjectGroup? @relation("liveSessionNotify", fields: [notifyGroupId], references: [id], onDelete: SetNull)
+  title         String
+  // ACTIVE (فعال) | ENDED (پایان‌یافته)
+  status        String        @default("ACTIVE")
+  startedAt     DateTime      @default(now())
+  // زمان اعلام رسمی شروع کلاس — فقط یک‌بار و فقط پس از آماده‌شدن استریم معلم ثبت می‌شود؛
+  // null یعنی جلسه فعال است ولی هنوز اعلان شروع برای دانش‌آموزان ارسال نشده
+  announcedAt   DateTime?
+  endedAt       DateTime?
+  enderId       String?
+  ender         User?         @relation("liveSessionEnder", fields: [enderId], references: [id], onDelete: SetNull)
+  // دلیل پایان اجباری توسط مدیر کل (گزارش مدیریتی) — null یعنی پایان عادی/معلم/سیستم
+  forceEndReason String?
+
+  chatMessages    LiveChatMessage[]
+  participantLogs LiveParticipantLog[]
+
+  @@index([classroomId, status])
+}
+
+// تنظیمات سراسری رسانه‌ها (رکورد یکتا) — سیاست فرمت/حجم آپلود کل پلتفرم
+model MediaSetting {
+  id        String   @id @default("global")
+  // JSON آرایه فرمت‌ها: [{ format, enabled, maxMB, extensions[] }]
+  formats   String
+  updatedAt DateTime @updatedAt
+}
+
+// گفتگوی متنی داخل جلسه — فقط برای اعضای مجاز همان جلسه (جدا از گفتگوی عمومی گروه)
+model LiveChatMessage {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   LiveSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User        @relation("liveChatSender", fields: [senderId], references: [id], onDelete: Cascade)
+  body      String
+  createdAt DateTime    @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+// گزارش حضور در جلسه (چه کسی چه زمانی وارد/خارج شد؛ اخراج هم ثبت می‌شود)
+model LiveParticipantLog {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   LiveSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation("liveParticipantLog", fields: [userId], references: [id], onDelete: Cascade)
+  role      String
+  joinedAt  DateTime    @default(now())
+  leftAt    DateTime?
+  kicked    Boolean     @default(false)
+  // شمارش اتصال‌های مجدد این شرکت‌کننده در همین جلسه (قطع‌ووصل واقعی سوکت؛
+  // خروج داوطلبانه و ورود دوباره بعد از آن جزو این عدد نیست)
+  reconnects Int        @default(0)
+
+  @@index([sessionId, userId])
+}
+
+// ─── تکالیف آموزشی (مرحله ۴) ───
+
+// تکلیف — همیشه متعلق به یک گروه درسی مشخص است، هرگز فقط به کل کلاس وصل نمی‌شود
+model Assignment {
+  id             String       @id @default(cuid())
+  subjectGroupId String
+  subjectGroup   SubjectGroup @relation(fields: [subjectGroupId], references: [id], onDelete: Cascade)
+  title          String
+  description    String       @default("")
+  // نحوه ارسال پاسخ: TEXT (متن) | FILE (فایل) | BOTH (هر دو)
+  answerMode     String       @default("BOTH")
+  // امکان اصلاح پاسخ توسط دانش‌آموز پس از ارسال
+  allowEdit      Boolean      @default(true)
+  // نمره بیشینه اختیاری؛ در صورت تعیین، نمره بین ۰ تا این عدد اعتبارسنجی می‌شود
+  maxGrade       Int?
+  // مهلت ارسال؛ اختیاری — پاسخ پس از آن «دیرهنگام» ثبت می‌شود
+  dueAt          DateTime?
+  attachmentName String?
+  attachmentKey  String?
+  attachmentMime String?
+  attachmentSize Int?
+  createdById    String
+  createdBy      User         @relation("assignmentCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  submissions    AssignmentSubmission[]
+  calendarEvents ClassEvent[]
+
+  @@index([subjectGroupId, createdAt])
+}
+
+// پاسخ دانش‌آموز به تکلیف — هر دانش‌آموز فقط پاسخ و نمره خودش را می‌بیند
+model AssignmentSubmission {
+  id           String     @id @default(cuid())
+  assignmentId String
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  studentId    String
+  student      User       @relation("submissionStudent", fields: [studentId], references: [id], onDelete: Cascade)
+
+  text     String  @default("")
+  fileName String?
+  fileKey  String?
+  fileMime String?
+  fileSize Int?
+
+  // زمان اولین ارسال ثابت می‌ماند؛ ویرایش‌ها فقط editedAt را به‌روز می‌کنند
+  submittedAt DateTime  @default(now())
+  editedAt    DateTime?
+
+  // بازخورد معلم: UNSEEN (مشاهده نشده) | APPROVED (تایید شده) | REJECTED (تایید نشده) | INCOMPLETE (ناقص)
+  feedbackStatus String    @default("UNSEEN")
+  feedbackNote   String?
+  grade          Int?
+  reviewedAt     DateTime?
+
+  @@unique([assignmentId, studentId])
+}
+
+// اعلان درون‌برنامه‌ای (تکلیف جدید، ثبت بازخورد و ...)
 model Notification {
-  id          String   @id @default(cuid())
-  userId      String
-  type        String   // "message" | "announcement" | "admin_broadcast"
-  title       String
-  body        String
-  url         String?  // deep-link URL to navigate to when clicked
-  isRead      Boolean  @default(false)
-  createdAt   DateTime @default(now())
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String // ASSIGNMENT_NEW | FEEDBACK_POSTED | LIVE_SESSION_NEW | PRIVATE_MESSAGE | GROUP_MESSAGE | SCHOOL_ANNOUNCEMENT
+  title     String
+  body      String    @default("")
+  link      String?
+  // کلید ضدتکرار: هر رویداد فقط یک‌بار برای هر کاربر (یکتا با userId)
+  dedupeKey String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
 
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pushDeliveries PushDelivery[]
 
-  @@index([userId, createdAt])
-  @@index([isRead])
+  @@unique([userId, dedupeKey])
+  @@index([userId, readAt, createdAt])
 }
 
-// Phase 35 — Virtual Classroom (online class) module.
-// A ClassroomSession represents one live online class session hosted in a
-// ClassRoom (subject group). The teacher starts it via the FAB in the
-// class chat; students join via the same FAB or via a shared room code.
-// Attendance is recorded per-participant in ClassroomParticipant.
-model ClassroomSession {
-  id          String   @id @default(cuid())
-  classId     String
-  startedById String
-  // 6-character room code for shareable join links. Generated server-side,
-  // unique. The teacher can share `https://.../?classroom=<code>` to let
-  // students join directly.
-  roomCode    String   @unique
-  status      String   @default("live") // "live" | "ended"
-  startedAt   DateTime @default(now())
-  endedAt     DateTime?
+// ─── ورود پیامکی و اعلان‌ها (مرحله ۷) ───
 
-  class       ClassRoom @relation(fields: [classId], references: [id], onDelete: Cascade)
-  startedBy   User      @relation("ClassroomSessionStartedBy", fields: [startedById], references: [id])
-  participants ClassroomParticipant[]
-
-  @@index([classId, status])
-  @@index([startedById])
+// ترجیحات اعلان هر کاربر
+model NotificationPref {
+  userId         String   @id
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // اعلان مرورگر (فقط با رضایت کاربر فعال می‌شود — سمت کلاینت هم بررسی می‌شود)
+  browserEnabled Boolean  @default(false)
+  // نمایش پیش‌نمایش متن پیام در اعلان مرورگر (پیش‌فرض خاموش برای حفظ حریم خصوصی)
+  previewEnabled Boolean  @default(false)
+  // انواع رویداد دارای پوش (JSON آرایه) — پیش‌فرض همه انواع
+  pushEventTypes String   @default("[]")
+  // صدای هشدار پاپ‌آپ شروع کلاس آنلاین — نمایش پاپ‌آپ به این تنظیم وابسته نیست
+  soundEnabled   Boolean  @default(true)
+  updatedAt      DateTime @updatedAt
 }
 
-// Per-user attendance row for a ClassroomSession. One row per
-// (session, user) — if the user re-joins after a disconnect, we update
-// `leftAt` to null + create a new row when they leave again (so we have
-// a full attendance history with join/leave timestamps).
-model ClassroomParticipant {
-  id          String   @id @default(cuid())
-  sessionId   String
-  userId      String
-  role        String   // "TEACHER" | "STUDENT" — mirrors the user's role in the class
-  joinedAt    DateTime @default(now())
-  leftAt      DateTime?
+// گفتگوی بی‌صدا شده (گروه یا خصوصی) — بدون اعلان برای پیام‌های جدید
+model MutedChat {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatType  String // GROUP | DIRECT
+  chatKey   String // شناسه گروه درسی یا شناسه طرف مقابل
+  createdAt DateTime @default(now())
 
-  session     ClassroomSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([sessionId, userId])
-  @@index([sessionId])
+  @@unique([userId, chatType, chatKey])
   @@index([userId])
 }
 
-// ============================================================================
-// SMS OTP — provider-based delivery (Phase 37).
-//
-// OtpCode: the OTP core store. The plaintext OTP is NEVER persisted — only
-// an HMAC-SHA-256 hash keyed with a server-side secret (OTP_HASH_SECRET /
-// NEXTAUTH_SECRET), so a database leak cannot reveal usable codes.
-// Verification is timing-safe, codes are one-time-use and attempt-limited.
-// See src/lib/sms/otp.ts (core) + src/lib/sms/providers/* (delivery only).
-// ============================================================================
+// کد یک‌بارمصرف ورود — همیشه هش‌شده ذخیره می‌شود، هرگز خام
 model OtpCode {
   id         String    @id @default(cuid())
-  // Normalized Iranian mobile (09xxxxxxxxx). Lookup key per purpose.
-  phone      String
-  // HMAC-SHA-256(code, secret) hex. EMPTY for "managed" entries where the
-  // provider itself generates + verifies the code (OTPy) — see providerId.
-  codeHash   String    @default("")
-  // What this code is for: "login" (SMS login flow).
-  purpose    String    @default("login")
-  expiresAt  DateTime
-  // Failed verification attempts (row deleted at MAX_VERIFY_ATTEMPTS).
+  // HMAC-SHA256 شماره نرمال‌شده با کلید سرور — خود شماره ذخیره نمی‌شود
+  phoneHmac  String
+  codeHash   String
   attempts   Int       @default(0)
-  // Set when the code was successfully used (one-time-use audit trail).
   consumedAt DateTime?
-  // Which provider delivered the code ("test" = test-mode display-only).
-  providerId String?
-  // Provider-side request/message id (OTPy request_id etc.) — not a secret.
-  requestId  String?
+  expiresAt  DateTime
   createdAt  DateTime  @default(now())
 
-  @@unique([phone, purpose])
-  @@index([expiresAt])
+  @@index([phoneHmac, createdAt])
+}
+
+// پیکربندی ورود و سرویس پیامک — تک‌ردیفی، فقط مدیر کل
+model SmsConfig {
+  id                    Int      @id @default(1)
+  // روش‌های ورود کاربران عادی (مدیر کل همیشه با رمز وارد می‌شود)
+  passwordLoginEnabled  Boolean  @default(true)
+  smsLoginEnabled       Boolean  @default(false)
+  // ارائه‌دهنده پیامک: "" | smsir | melipayamak | farazsms | otpy (REST سازگار)
+  provider              String   @default("")
+  enabled               Boolean  @default(false)
+  // اعتبارهای سرویس — JSON و فقط سمت سرور (هرگز به مرورگر نمی‌رود)
+  credentials           String   @default("{}")
+  // سیاست کد یک‌بارمصرف
+  codeTtlSeconds        Int      @default(120)
+  resendCooldownSeconds Int      @default(60)
+  maxAttemptsPerCode    Int      @default(5)
+  maxRequestsPerHour    Int      @default(5)
+  updatedAt             DateTime @updatedAt
+}
+
+// گزارش ارسال پیامک — بدون کد ورود و بدون شماره کامل (فقط ماسک‌شده)
+model SmsSendLog {
+  id          Int      @id @default(autoincrement())
+  provider    String
+  maskedPhone String
+  purpose     String   @default("OTP") // OTP | TEST
+  ok          Boolean
+  error       String?
+  createdAt   DateTime @default(now())
+
   @@index([createdAt])
 }
 
-// Delivery + error log for every outbound SMS attempt. SECURITY: the OTP
-// code, credentials and full message bodies are NEVER written here — only
-// the masked recipient phone, provider, status and sanitized error info.
-model SmsDeliveryLog {
-  id           String   @id @default(cuid())
-  provider     String   // "otpy" | "melipayamak" | "faraz" | "smsir"
-  phoneMasked  String   // e.g. 0912***4567 (PII-minimized)
-  status       String   // "sent" | "failed"
-  messageId    String?  // provider message/request id (not secret)
-  errorCode    String?  // machine-readable provider error code
-  errorMessage String?  // sanitized human-readable error (no code/credentials)
+// ─── دستیار هوش مصنوعی «دستیار دانیار» (مرحله ۶) ───
+
+// تنظیمات سراسری سرویس هوش مصنوعی — فقط مدیر کل؛ کلید API هرگز به مرورگر نمی‌رود
+model AiConfig {
+  id                 Int      @id @default(1)
+  // ارائه‌دهنده: openai | anthropic
+  provider           String   @default("openai")
+  // آدرس پایه سفارشی (سازگار با OpenAI/Anthropic)؛ خالی = آدرس رسمی سرویس
+  baseUrl            String   @default("")
+  model              String   @default("")
+  // کلید API — فقط سمت سرور نگهداری می‌شود
+  apiKey             String   @default("")
+  enabled            Boolean  @default(false)
+  // دستورالعمل عمومی دستیار + دستورالعمل نقش مدیر مدرسه
+  generalInstruction String   @default("")
+  managerInstruction String   @default("")
+  // بیشینه فراخوانی ابزار در هر پاسخ (کنترل هزینه)
+  maxToolCalls       Int      @default(4)
+  updatedAt          DateTime @updatedAt
+}
+
+// تنظیمات دستیار برای هر مدرسه: فعال/غیرفعال + نقش‌ها + سهمیه مصرف
+model AiSchoolSetting {
+  id                Int     @id @default(autoincrement())
+  schoolId          String  @unique
+  school            School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // کلید اصلی مدرسه
+  enabled           Boolean @default(false)
+  // فعال برای نقش مدیر مدرسه (فعلاً تنها نقش دارای دستیار)
+  managerEnabled    Boolean @default(true)
+  // سهمیه پیام روزانه به ازای هر کاربر؛ null = بدون محدودیت
+  dailyMessageLimit Int?
+}
+
+// گفتگوی خصوصی کاربر با دستیار — دائمی و فقط برای خودش
+model AiConversation {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String   @default("دستیار دانیار")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages AiMessage[]
+
+  @@index([userId, updatedAt])
+}
+
+// پیام دستیار: USER (کاربر) | ASSISTANT (پاسخ مدل)
+// refs = منابع داده برنامه که در پاسخ استفاده شد (تکلیف/کلاس/بازخورد)
+model AiMessage {
+  id             Int            @id @default(autoincrement())
+  conversationId Int
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  content        String
+  refs           Json?
+  stopped        Boolean        @default(false)
+  // شناسه سمت کلاینت برای جلوگیری از ثبت تکراری
+  clientId       String?        @unique
+  createdAt      DateTime       @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+// ─── حضور و غیاب تقویم‌محور (مرحله ۸) ───
+
+// جلسه حضور و غیاب — متعلق به یک کلاس و یک روز مشخص (تقویم جلالی)
+// و یک جلسه مشخص؛ به گروه درسی وابسته نیست
+model AttendanceSession {
+  id          String    @id @default(cuid())
+  classroomId String
+  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  // کلید تاریخ جلالی با قالب 1404-07-19 (مرتب‌سازی رشته‌ای صحیح و سازگار با تقویم ایرانی)
+  dateKey     String
+  // عنوان جلسه (مثلا «جلسه اول») — برای هر کلاس در هر روز یکتا
+  title       String
+  // ثبت‌کننده اولیه (معلم یا مدیر)
+  creatorId   String
+  creator     User      @relation("attendanceSessionCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  // DRAFT (پیش‌نویس) | FINALIZED (نهایی) — جلسه پیش‌نویس در آمار نهایی دانش‌آموز حساب نمی‌شود
+  status      String    @default("DRAFT")
+  finalizedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  records AttendanceRecord[]
+  edits   AttendanceEditLog[]
+
+  @@unique([classroomId, dateKey, title])
+  @@index([classroomId, dateKey])
+  @@index([status])
+}
+
+// وضعیت حضور هر دانش‌آموز در جلسه — PRESENT (حاضر) | ABSENT (غایب)
+// دانش‌آموز ثبت‌نام‌شده بدون رکورد در جلسه = UNSET (ثبت‌نشده؛ جدا از غیبت)
+model AttendanceRecord {
+  id        String            @id @default(cuid())
+  sessionId String
+  session   AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  studentId String
+  student   User              @relation("attendanceStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  status    String            @default("PRESENT")
+  note      String?
+  updatedAt DateTime          @updatedAt
+
+  @@unique([sessionId, studentId])
+  @@index([studentId, status])
+}
+
+// تاریخچه اصلاحات — هر تغییر وضعیت/یادداشت با ثبت‌کننده و زمان حفظ می‌شود
+model AttendanceEditLog {
+  id        String            @id @default(cuid())
+  sessionId String
+  session   AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  studentId String
+  oldStatus String
+  newStatus String
+  oldNote   String?
+  newNote   String?
+  editorId  String
+  editor    User              @relation("attendanceEditor", fields: [editorId], references: [id], onDelete: Cascade)
+  createdAt DateTime          @default(now())
+
+  @@index([sessionId, studentId])
+}
+
+// آمار مصرف و خطا — بدون هیچ متن گفتگو؛ فقط مدیر کل می‌بیند
+model AiUsageLog {
+  id           Int      @id @default(autoincrement())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  schoolId     String?
+  ok           Boolean
+  errorType    String? // CONFIG_MISSING | DISABLED_GLOBAL | DISABLED_SCHOOL | QUOTA | PROVIDER_ERROR | TIMEOUT | ABORTED
+  provider     String?
+  model        String?
+  inputTokens  Int?
+  outputTokens Int?
   latencyMs    Int?
-  purpose      String   @default("otp") // "otp" | "otp-test" | "announcement" | "test-connection"
   createdAt    DateTime @default(now())
 
-  @@index([createdAt])
-  @@index([provider, createdAt])
+  @@index([schoolId, createdAt])
+  @@index([userId, createdAt])
 }
 
-// ============================================================================
-// SECURITY — Audit log for sensitive operations.
-// Written by src/lib/audit.ts from: login success/failure, impersonation,
-// user create/update/delete + password changes, role changes, school
-// create/delete, permission reset, site/AI settings changes, push broadcast,
-// OTP requests, classroom session end, bulk operations.
-// NEVER store passwords, OTP codes, tokens or API keys here — metadata only.
-// ============================================================================
-model AuditLog {
-  id             String   @id @default(cuid())
-  createdAt      DateTime @default(now())
-  // Actor (nullable for anonymous events like failed logins).
-  actorId        String?
-  actorUsername  String?  // denormalized so logs stay readable after user deletion
-  actorRole      String?
-  // What happened, e.g. "LOGIN_FAILURE", "IMPERSONATE", "USER_DELETE".
-  action         String
-  // Optional target, e.g. "user:<id>", "school:<id>", "class:<id>".
-  targetType     String?
-  targetId       String?
-  // Client context.
-  ip             String?
-  userAgent      String?
-  schoolId       String?
-  // Free-form metadata (JSON). Secret-free by construction (audit() strips
-  // well-known secret keys defensively).
-  metadata       String?
+// ─── کتابخانه نمونه‌سؤالات (مرحله ۹) ───
+
+// نمونه‌سؤال — متعلق به کلاس‌های انتخاب‌شده معلم (چندکلاسه) و مستقل از گروه درسی
+// نام درس برای دسته‌بندی و جست‌وجو ثبت می‌شود
+model SampleQuestion {
+  id          String    @id @default(cuid())
+  schoolId    String
+  school      School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title       String
+  // نام درس (دسته‌بندی و جست‌وجو)
+  subject     String
+  // موضوع (اختیاری) برای جست‌وجوی دقیق‌تر
+  topic       String?
+  description String    @default("")
+  // نمایش پاسخ‌نامه برای دانش‌آموزان (پیش‌فرض غیرفعال)
+  showAnswer  Boolean   @default(false)
+  // PUBLISHED (منتشرشده) | UNPUBLISHED (پیش‌نویس) — دانش‌آموز فقط منتشرشده را می‌بیند
+  status      String    @default("PUBLISHED")
+  publishedAt DateTime?
+  createdById String
+  createdBy   User      @relation("sampleqCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  // شناسه سمت کلاینت — تلاش مجدد هرگز نمونه‌سؤال تکراری نمی‌سازد
+  clientId    String?   @unique
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  classes   SampleQuestionClass[]
+  files     SampleQuestionFile[]
+  bookmarks SampleQuestionBookmark[]
+
+  @@index([schoolId, status, createdAt])
+  @@index([schoolId, subject])
+  @@index([createdById])
+}
+
+// کلاس‌های مخاطب نمونه‌سؤال (انتخاب چند کلاس توسط معلم)
+model SampleQuestionClass {
+  id          String         @id @default(cuid())
+  questionId  String
+  question    SampleQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  classroomId String
+  classroom   Classroom      @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, classroomId])
+  @@index([classroomId])
+}
+
+// فایل نمونه‌سؤال یا پاسخ‌نامه — هر فایل کلید ذخیره‌سازی یکتای خودش را دارد؛
+// حذف/جایگزینی فایل یک نمونه‌سؤال هرگز فایل نمونه‌سؤال دیگر را حذف نمی‌کند
+model SampleQuestionFile {
+  id         String         @id @default(cuid())
+  questionId String
+  question   SampleQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  // QUESTION (فایل سؤال) | ANSWER (فایل پاسخ‌نامه)
+  role       String
+  name       String
+  key        String         @unique
+  mime       String
+  size       Int
+  createdAt  DateTime       @default(now())
+
+  @@index([questionId, role])
+}
+
+// نشان‌گذاری نمونه‌سؤال برای دسترسی سریع (توسط دانش‌آموز)
+model SampleQuestionBookmark {
+  id         String         @id @default(cuid())
+  questionId String
+  question   SampleQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User           @relation("sampleqBookmarker", fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime       @default(now())
+
+  @@unique([questionId, userId])
+  @@index([userId])
+}
+
+// ─── تقویم آموزشی کلاسی ───
+
+// رویداد تقویم آموزشی — کاملاً کلاس‌محور؛ هر کلاس تقویم جداگانه خودش را دارد.
+// classroomId = null یعنی رویداد «کل مدرسه» (فقط مدیر مدرسه) که در تقویم
+// همه کلاس‌های آن مدرسه هم نمایش داده می‌شود.
+// تاریخ با کلید جلالی «1404-07-19» ذخیره می‌شود (سازگار با حضور و غیاب).
+model ClassEvent {
+  id          String     @id @default(cuid())
+  schoolId    String
+  school      School     @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  classroomId String?
+  classroom   Classroom? @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  // کلید تاریخ جلالی با قالب 1404-07-19 (مرتب‌سازی رشته‌ای صحیح)
+  dateKey     String
+  // HOLIDAY | EXAM | HOMEWORK | PARTY | SPORTS | ACADEMIC | TRIP | CUSTOM
+  type        String
+  // نام رویداد سفارشی — فقط برای نوع CUSTOM
+  customTitle String?
+  description String     @default("")
+  createdById String
+  createdBy   User       @relation("classEventCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // تکلیف درسی مرتبط — فقط برای نوع HOMEWORK که از تقویم همراه با ایجاد تکلیف ثبت می‌شود؛
+  // حذف تکلیف → رویداد تقویم باقی می‌ماند (SetNull) و لینک نمایش داده نمی‌شود
+  assignmentId String?
+  assignment   Assignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+
+  @@index([schoolId, dateKey])
+  @@index([classroomId, dateKey])
+  @@index([createdById])
+  @@index([assignmentId])
+}
+
+// ─── پوش نوتیفیکیشن واقعی مرورگر (Web Push + Service Worker) ───
+
+// اشتراک پوش هر دستگاه مرورگر — endpoint یکتاست؛ endpoint و کلیدهای
+// رمزنگاری هرگز به هیچ کلاینتی برگردانده نمی‌شوند (فقط سمت سرور)
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // آدرس یکتای سرویس پوش مرورگر (FCM/Mozilla/…)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  // شناسه دستگاه سمت کلاینت — برای مدیریت «همین دستگاه»
+  deviceId  String?
+  // برچسب کوتاه دستگاه (نام مرورگر / سیستم‌عامل) — بدون رشته کامل UA
+  label     String?
+  // خاموش/روشن پوش فقط برای همین دستگاه
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries PushDelivery[]
+
+  @@index([userId])
+  @@index([deviceId])
+}
+
+// یک ارسال پوش به یک اشتراک برای یک اعلان مشخص — ضدتکرار قطعی:
+// هر اشتراک هر رویداد را حداکثر یک‌بار دریافت می‌کند
+model PushDelivery {
+  id             String           @id @default(cuid())
+  subscriptionId String
+  subscription   PushSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  notificationId String
+  notification   Notification     @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  // نوع رویداد برای گزارش مدیر کل (بدون هیچ محتوای خصوصی)
+  type           String
+  // PENDING | SENT | FAILED | EXPIRED | SKIPPED
+  status         String           @default("PENDING")
+  attempts       Int              @default(0)
+  // فقط خطای غیرمحرمانه (کد وضعیت/دسته خطا) — هرگز endpoint/کلید/متن پیام
+  lastError      String?
+  nextAttemptAt  DateTime?
+  createdAt      DateTime         @default(now())
+  sentAt         DateTime?
+
+  @@unique([subscriptionId, notificationId])
+  @@index([status, nextAttemptAt])
+  @@index([type, status, createdAt])
+}
+
+// پیکربندی پوش پلتفرم — تک‌ردیفی؛ کلیدهای VAPID فقط در env سرور (نه دیتابیس)
+model PushConfig {
+  id              Int      @id @default(1)
+  platformEnabled Boolean  @default(true)
+  updatedAt       DateTime @updatedAt
+}
+
+// گزارش جعل هویت (ورود مدیر کل به‌جای کاربر) — برای حسابرسی
+model ImpersonationLog {
+  id        String    @id @default(cuid())
+  adminId   String
+  admin     User      @relation("impersonationAdmin", fields: [adminId], references: [id], onDelete: Cascade)
+  targetId  String
+  target    User      @relation("impersonationTarget", fields: [targetId], references: [id], onDelete: Cascade)
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  @@index([adminId, startedAt])
+}
+
+// گزارش ارسال انبوه پیامک/اعلان مدیر کل — متن پیام اطلاع‌رسانی عمومی مدیر است
+model BulkSendLog {
+  id          String   @id @default(cuid())
+  senderId    String
+  sender      User     @relation("bulkSendLog", fields: [senderId], references: [id], onDelete: Cascade)
+  channel     String // SMS | PUSH
+  schoolId    String?
+  classroomId String?
+  roles       String   @default("[]") // JSON آرایه نقش‌ها
+  text        String   @default("")
+  total       Int      @default(0)
+  sent        Int      @default(0)
+  failed      Int      @default(0)
+  skipped     Int      @default(0)
+  ok          Boolean  @default(false)
+  error       String?
+  createdAt   DateTime @default(now())
 
   @@index([createdAt])
-  @@index([actorId, createdAt])
-  @@index([action, createdAt])
+}
+
+// تنظیمات سراسری پلتفرم (رکورد یکتا با id='global') — هویت، فونت، پس‌زمینه چت و اسپلش
+model PlatformSetting {
+  id                     String   @id @default("global")
+  // ─── هویت ───
+  appName                String   @default("دانیار")
+  logoKey                String?
+  // ─── فونت برنامه ───
+  fontPreset             String   @default("vazirmatn")
+  fontCustomKey          String?
+  // ─── پس‌زمینه چت موبایل (جداگانه برای حالت روشن/تیره) ───
+  chatBgKey              String?
+  chatBgDarkKey          String?
+  // ─── اسپلش اسکرین ───
+  splashEnabled          Boolean  @default(true)
+  splashDurationMs       Int      @default(2200)
+  splashShowAppName      Boolean  @default(true)
+  splashShowDisplayName  Boolean  @default(true)
+  splashBgKey            String?
+  splashAppNameFont      String   @default("")
+  splashAppNameColor     String   @default("#0f766e")
+  splashAppNameSize      Int      @default(56)
+  splashDisplayNameFont  String   @default("")
+  splashDisplayNameColor String   @default("#475569")
+  splashDisplayNameSize  Int      @default(16)
+  updatedAt              DateTime @updatedAt
+}
+
+// ─── پایش زیرساخت (پنل مدیر کل: /superadmin/infrastructure) ───
+// آستانه‌های هشدار منابع — رکورد یکتا با id='global'؛ فقط عدد درصد (۱..۹۹)
+model InfraSetting {
+  id              String   @id @default("global")
+  cpuThreshold    Int      @default(85)
+  ramThreshold    Int      @default(85)
+  diskThreshold   Int      @default(90)
+  // تعداد نمونهٔ متوالی بالای آستانه برای «هشدار پایدار» (جلوگیری از هشدار لحظه‌ای)
+  sustainedCount  Int      @default(3)
+  updatedAt       DateTime @updatedAt
+}
+
+// رویدادهای پایش: خطای سرویس، هشدار پایدار منابع و بازیابی — فقط تغییر وضعیت
+// ثبت می‌شود (نه هر poll) و سیاست پاک‌سازی دارد تا دیتابیس رشد نامحدود نداشته باشد.
+model InfraEventLog {
+  id        String   @id @default(uuid())
+  kind      String   // 'error' | 'alert' | 'recovery'
+  service   String   // 'db' | 'upload' | 'socket' | 'livekit' | 'turn' | 'cpu' | 'ram' | 'disk'
+  message   String
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }

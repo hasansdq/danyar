@@ -3,11 +3,19 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@font-face {
+  font-family: "Vazirmatn";
+  src: url("/fonts/Vazirmatn-Variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-vazirmatn);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "Vazirmatn", "Segoe UI", Tahoma, sans-serif;
+  --font-mono: "Vazirmatn", monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -45,71 +53,71 @@
 
 :root {
   --radius: 0.625rem;
-  --background: oklch(0.99 0.005 95);
-  --foreground: oklch(0.18 0.04 165);
+  --background: oklch(0.985 0.004 175);
+  --foreground: oklch(0.17 0.02 200);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.04 165);
+  --card-foreground: oklch(0.17 0.02 200);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.04 165);
-  --primary: oklch(0.52 0.12 165);
-  --primary-foreground: oklch(0.99 0.01 95);
-  --secondary: oklch(0.96 0.02 165);
-  --secondary-foreground: oklch(0.30 0.06 165);
-  --muted: oklch(0.96 0.01 95);
-  --muted-foreground: oklch(0.50 0.03 165);
-  --accent: oklch(0.94 0.04 165);
-  --accent-foreground: oklch(0.30 0.06 165);
-  --destructive: oklch(0.58 0.24 27);
-  --border: oklch(0.90 0.02 165);
-  --input: oklch(0.92 0.02 165);
-  --ring: oklch(0.52 0.12 165);
-  --chart-1: oklch(0.62 0.20 165);
-  --chart-2: oklch(0.65 0.18 145);
-  --chart-3: oklch(0.55 0.16 195);
-  --chart-4: oklch(0.70 0.18 85);
-  --chart-5: oklch(0.60 0.22 35);
-  --sidebar: oklch(0.985 0.005 95);
-  --sidebar-foreground: oklch(0.18 0.04 165);
-  --sidebar-primary: oklch(0.52 0.12 165);
-  --sidebar-primary-foreground: oklch(0.99 0.01 95);
-  --sidebar-accent: oklch(0.96 0.02 165);
-  --sidebar-accent-foreground: oklch(0.30 0.06 165);
-  --sidebar-border: oklch(0.90 0.02 165);
-  --sidebar-ring: oklch(0.52 0.12 165);
+  --popover-foreground: oklch(0.17 0.02 200);
+  --primary: oklch(0.58 0.1 185);
+  --primary-foreground: oklch(0.99 0.005 180);
+  --secondary: oklch(0.955 0.01 180);
+  --secondary-foreground: oklch(0.3 0.04 200);
+  --muted: oklch(0.955 0.008 180);
+  --muted-foreground: oklch(0.5 0.02 200);
+  --accent: oklch(0.93 0.03 180);
+  --accent-foreground: oklch(0.3 0.06 200);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.9 0.01 180);
+  --input: oklch(0.9 0.01 180);
+  --ring: oklch(0.58 0.1 185);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
 }
 
 .dark {
-  --background: oklch(0.16 0.02 165);
-  --foreground: oklch(0.98 0.005 95);
-  --card: oklch(0.22 0.025 165);
-  --card-foreground: oklch(0.98 0.005 95);
-  --popover: oklch(0.22 0.025 165);
-  --popover-foreground: oklch(0.98 0.005 95);
-  --primary: oklch(0.68 0.14 165);
-  --primary-foreground: oklch(0.16 0.02 165);
-  --secondary: oklch(0.28 0.03 165);
-  --secondary-foreground: oklch(0.98 0.005 95);
-  --muted: oklch(0.28 0.03 165);
-  --muted-foreground: oklch(0.72 0.02 165);
-  --accent: oklch(0.30 0.04 165);
-  --accent-foreground: oklch(0.98 0.005 95);
-  --destructive: oklch(0.70 0.19 22);
+  --background: oklch(0.16 0.015 220);
+  --foreground: oklch(0.97 0.005 180);
+  --card: oklch(0.205 0.02 210);
+  --card-foreground: oklch(0.97 0.005 180);
+  --popover: oklch(0.205 0.02 210);
+  --popover-foreground: oklch(0.97 0.005 180);
+  --primary: oklch(0.72 0.11 185);
+  --primary-foreground: oklch(0.14 0.03 210);
+  --secondary: oklch(0.27 0.02 210);
+  --secondary-foreground: oklch(0.97 0.005 180);
+  --muted: oklch(0.26 0.02 210);
+  --muted-foreground: oklch(0.7 0.015 190);
+  --accent: oklch(0.3 0.03 200);
+  --accent-foreground: oklch(0.97 0.005 180);
+  --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 12%);
   --input: oklch(1 0 0 / 16%);
-  --ring: oklch(0.68 0.14 165);
-  --chart-1: oklch(0.62 0.20 165);
-  --chart-2: oklch(0.65 0.18 145);
-  --chart-3: oklch(0.55 0.16 195);
-  --chart-4: oklch(0.70 0.18 85);
-  --chart-5: oklch(0.60 0.22 35);
-  --sidebar: oklch(0.22 0.025 165);
-  --sidebar-foreground: oklch(0.98 0.005 95);
-  --sidebar-primary: oklch(0.68 0.14 165);
-  --sidebar-primary-foreground: oklch(0.16 0.02 165);
-  --sidebar-accent: oklch(0.30 0.04 165);
-  --sidebar-accent-foreground: oklch(0.98 0.005 95);
-  --sidebar-border: oklch(1 0 0 / 12%);
-  --sidebar-ring: oklch(0.68 0.14 165);
+  --ring: oklch(0.6 0.09 185);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
 }
 
 @layer base {
@@ -118,152 +126,126 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: "Vazirmatn", "Segoe UI", Tahoma, sans-serif;
   }
 }
 
-/* Custom scrollbar for RTL lists */
-.scrollbar-rtl::-webkit-scrollbar {
+/* اسکرول‌بار سفارشی */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(0.6 0.02 200 / 35%) transparent;
+}
+
+::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-.scrollbar-rtl::-webkit-scrollbar-track {
+
+::-webkit-scrollbar-track {
   background: transparent;
 }
-.scrollbar-rtl::-webkit-scrollbar-thumb {
-  background: oklch(0.85 0.02 165);
-  border-radius: 999px;
-}
-.scrollbar-rtl::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.70 0.05 165);
+
+::-webkit-scrollbar-thumb {
+  background: oklch(0.6 0.02 200 / 35%);
+  border-radius: 9999px;
 }
 
-/* Hidden scrollbar — used on the conversation list so the bottom-nav
-   padding (pb-20) doesn't push the last row out of view. */
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.55 0.03 200 / 55%);
 }
 
-/* Persian numerals helper */
-.persian-nums {
-  font-feature-settings: "ss01";
+/* در RTL، فلش‌های بخش‌های عددی و ورودی‌های رمز */
+input[type="password"],
+input.ltr-digits {
+  direction: ltr;
+  text-align: right;
 }
 
-/* Smooth page transitions */
-@keyframes fadeInUp {
+input[type="number"] {
+  direction: ltr;
+  text-align: left;
+}
+
+/* حباب‌های چت */
+.chat-bubble-me {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.chat-bubble-other {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+/* daniar theme build marker */
+
+/* ─── پاپ‌آپ شروع کلاس آنلاین ─── */
+/* ورود کوتاه و ملایم — بدون چشمک‌زدن سریع و بدون انیمیشن بی‌پایان */
+@keyframes daniar-pop-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(14px) scale(0.97);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
   }
 }
-.animate-fade-in-up {
-  animation: fadeInUp 0.3s ease-out;
-}
 
-/* Announcement message — red animated border to distinguish from regular chat */
-@keyframes announcementPulse {
-  0%, 100% {
-    border-color: rgb(239 68 68);
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.35);
+/* حلقه موج ملایم جلب توجه — فقط سه بار تکرار می‌شود، نه مداوم */
+@keyframes daniar-attention-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 45%, transparent);
   }
-  50% {
-    border-color: rgb(254 202 202);
-    box-shadow: 0 0 0 5px rgba(239, 68, 68, 0.1);
+  70% {
+    box-shadow: 0 0 0 14px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
   }
 }
-.announcement-bubble {
-  border: 2px solid rgb(239 68 68) !important;
-  animation: announcementPulse 2s ease-in-out infinite;
+
+.daniar-pop-in {
+  animation: daniar-pop-in 0.35s cubic-bezier(0.2, 0.8, 0.3, 1) both;
 }
 
-/* =====================================================================
-   Phase 27 — Telegram-style chat bubbles (with tail + asymmetric corners)
-   =====================================================================
-   The bubble shape uses a small CSS triangle (a zero-size element with
-   a thick border on one side + transparent on the others) as a "tail"
-   pointing to the sender's side. Combined with asymmetric border-radius
-   (the tail corner is less rounded) this gives the bubble the Telegram
-   look — a rounded rectangle that "connects" to the sender's avatar.
-
-   Two tail variants:
-     .bubble-tail-start  → the tail is on the START side of the bubble.
-                           In RTL flex, "start" is the RIGHT visually.
-                           Used for the OTHER person's messages (their
-                           avatar is on the right in RTL).
-     .bubble-tail-end    → the tail is on the END side (LEFT in RTL).
-                           Used for OWN messages (your avatar is on the
-                           left in RTL with flex-row-reverse).
-
-   The tail is a pseudo-element positioned at the bubble's bottom edge,
-   slightly outside the bubble's border-radius curve so it looks like a
-   continuation of the bubble shape (not a separate triangle).
-*/
-
-/* Tail on the START (right in RTL) — for OTHERS' messages. */
-.bubble-tail-start::before {
-  content: "";
-  position: absolute;
-  bottom: 0;
-  inset-inline-start: -6px;
-  width: 0;
-  height: 0;
-  /* A small triangle pointing left (the tail's tip extends past the
-     bubble's left edge in LTR / right edge in RTL). */
-  border-block: 0 solid transparent;
-  border-inline-start: 7px solid transparent;
-  border-inline-end: 0;
-  /* Match the bubble's background — set via a CSS variable so the
-     "own" + "other" + "with-file" + "linked-card" variants all work. */
-  border-bottom: 8px solid var(--bubble-tail-color, hsl(var(--background)));
-  /* Anchor the tail to the bubble's bottom edge. */
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+.daniar-attention {
+  animation: daniar-attention-ring 2.4s ease-out 3;
 }
 
-/* Tail on the END (left in RTL) — for OWN messages. */
-.bubble-tail-end::after {
-  content: "";
-  position: absolute;
-  bottom: 0;
-  inset-inline-end: -6px;
-  width: 0;
-  height: 0;
-  border-block: 0 solid transparent;
-  border-inline-end: 7px solid transparent;
-  border-inline-start: 0;
-  border-bottom: 8px solid var(--bubble-tail-color, hsl(var(--primary)));
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+/* رعایت تنظیم کاهش حرکت دستگاه */
+@media (prefers-reduced-motion: reduce) {
+  .daniar-pop-in,
+  .daniar-attention {
+    animation: none;
+  }
 }
 
-/* Asymmetric border-radius — the tail corner is sharper (smaller radius)
-   so the tail blends into the bubble. Telegram uses this trick:
-   - Own message (tail-end): bottom-end corner is sharp.
-   - Other message (tail-start): bottom-start corner is sharp. */
-.bubble-tail-start {
-  border-start-start-radius: 4px; /* top-start: small (close to avatar) */
-  border-start-end-radius: 16px; /* top-end: full rounded */
-  border-end-end-radius: 16px; /* bottom-end: full rounded */
-  border-end-start-radius: 4px; /* bottom-start (tail): sharp */
-}
-.bubble-tail-end {
-  border-start-start-radius: 16px; /* top-start: full rounded */
-  border-start-end-radius: 4px; /* top-end: small */
-  border-end-end-radius: 4px; /* bottom-end (tail): sharp */
-  border-end-start-radius: 16px; /* bottom-start: full rounded */
+/* ─── تمام‌صفحه کلاس آنلاین ─── */
+/* کاشی ویدیو در حالت تمام‌صفحه — پس‌زمینه کاملاً سیاه و بدون گوشه گرد */
+.fs-active-tile {
+  background: #000;
+  border-radius: 0;
 }
 
-/* Voice message player — extra polish for the Telegram look:
-   a slightly taller + wider min-size so the waveform + play button
-   have room to breathe. */
-.voice-message-bubble {
-  min-width: 200px;
-  min-height: 56px;
+/* ویدیوی اشتراک صفحه در موبایل عمودی: چرخش ۹۰ درجه تا دسکتاپ معلم
+   به‌صورت افقی و تمام‌صفحه دیده شود (کاربر گوشی را افقی می‌گیرد)؛
+   اگر مرورگر قفل جهت داشت، صفحه افقی می‌شود و این کلاس خودبه‌خود بی‌اثر است */
+.fs-rotated-video {
+  position: absolute !important;
+  top: 50% !important;
+  left: 50% !important;
+  width: 100vh;
+  height: 100vw;
+  max-width: none !important;
+  max-height: none !important;
+  transform: translate(-50%, -50%) rotate(90deg);
+  object-fit: contain;
+}
+
+@supports (width: 100dvh) {
+  .fs-rotated-video {
+    width: 100dvh;
+    height: 100dvw;
+  }
 }

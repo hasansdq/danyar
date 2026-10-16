@@ -12,6 +12,34 @@
 		}
 	}
 
+	# ─── پیام‌رسان بلادرنگ (Socket.IO) — مسیر درجه‌یک پیش‌نمایش ───
+	# تفکیک پیکربندی: این فایل فقط «درگاه پیش‌نمایش/سندباکس» است؛ پیکربندی
+	# استقرار Docker جدا است (deploy/nginx.conf روی 127.0.0.1:3034 با
+	# location /socket.io/ خودش) و نباید تغییر کند.
+	# این مسیر تضمین می‌کند /socket.io همیشه به سرویس :3003 برسد حتی بدون
+	# XTransformPort (مثل همان کاری که nginx داکر برای /socket.io/ می‌کند).
+	# نکته شناخته‌شده: لبهٔ پیش‌نمایش زنده هدر کوکی را روی «درخواست ارتقای
+	# websocket» حذف می‌کند؛ احراز هویت سمت سرور روی polling انجام می‌شود
+	# (ترتیب transports در socket-client.ts) و ارتقا روی همان نشست تأیید
+	# می‌شود — پس این محدودیت لبه بی‌اثر است.
+	handle /socket.io* {
+		reverse_proxy localhost:3003 {
+			header_up Host {host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# سیگنالینگ LiveKit (رسانه کلاس آنلاین) — توسعه محلی
+	handle /rtc* {
+		reverse_proxy localhost:7880
+	}
+
+	handle /twirp* {
+		reverse_proxy localhost:7880
+	}
+
 	handle {
 		reverse_proxy localhost:3000 {
 			header_up Host {host}

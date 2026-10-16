@@ -22,7 +22,6 @@ tool-results
 tsconfig.tsbuildinfo
 socket-server.mjs
 
-# Exclude development secrets, binaries and delivery bundles
 .env.*
 !.env.example
 .tools

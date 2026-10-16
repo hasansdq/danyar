@@ -72,7 +72,6 @@ server.log
 /uploads/*
 !/uploads/.gitkeep
 
-# Local preview credentials and generated delivery archives
 !.env.example
 /.tools/turnserver
 /.tools/turnserver-preview.conf

@@ -1,362 +1,294 @@
-"use client";
+'use client'
 
-import * as React from "react";
-import { Mic, Square, Loader2, Send, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import { useToast } from "@/hooks/use-toast";
-import { toPersianDigits } from "./persian";
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Check, Loader2, Trash2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
-/* ------------------------------------------------------------------ */
-/* VoiceRecorder — in-composer voice message recorder                 */
-/* ------------------------------------------------------------------ */
+/** سقف مدت پیام صوتی — ۵ دقیقه */
+export const MAX_VOICE_SEC = 300
 
-/**
- * A reusable voice-recording button for the message composer.
- *
- * Uses the browser's MediaRecorder API to capture audio from the
- * microphone. The recording flow (WhatsApp-style):
- *
- *   1. The user clicks the Mic button (visible only when the textarea
- *      is empty — replaces the Send button so the composer doesn't get
- *      crowded).
- *   2. The browser prompts for microphone permission (if not already
- *      granted). On grant, recording starts.
- *   3. The composer row transforms into a "recording" UI:
- *        [● recording] [timer 00:12] [waveform] [cancel X] [send ✓]
- *      The red dot pulses; the timer counts up; the send button stops
- *      the recording + hands the File to the parent.
- *   4. The cancel (X) button stops + discards the recording.
- *   5. The send (✓) button stops + hands the recorded audio File to
- *      `onSend(file)` — the parent uploads + posts it as a normal file
- *      attachment message (so the chat-service's existing file-relay
- *      path handles it, no new socket event needed).
- *
- * Fallbacks / errors:
- *   - If the browser doesn't support MediaRecorder → toast + hide the
- *     Mic button (the user can still send text/files).
- *   - If the user denies microphone permission → toast + cancel the
- *     recording state.
- *   - If the recording produces no audio data (rare) → toast + cancel.
- *
- * The recorded File is named `voice-<timestamp>.webm` (or `.ogg` on
- * Firefox — both are supported by the existing file-upload route +
- * the chat's audio-player UI).
- */
+/** تعداد ستون موج نهایی — هماهنگ با VoicePlayer */
+const WAVE_BARS = 44
 
-interface VoiceRecorderProps {
-  /** Called with the recorded audio File when the user taps "send". */
-  onSend: (file: File) => void | Promise<void>;
-  /** Disable the trigger (e.g. when the chat is closed or file uploads
-   *  are disabled in the class). */
-  disabled?: boolean;
-  /** Optional className for the trigger button. */
-  className?: string;
-  /** Phase 27 — called whenever the recorder transitions between idle ↔
-   *  recording. The parent uses this to hide the rest of the composer
-   *  (emoji button, paperclip, textarea) on mobile/tablet so the
-   *  recording UI takes the full width of the bottom bar — like Telegram
-   *  + WhatsApp do. */
-  onRecordingChange?: (recording: boolean) => void;
+export interface VoiceRecording {
+  blob: Blob
+  mime: string
+  duration: number
+  waveform: number[] | null
 }
 
-type RecorderState = "idle" | "recording" | "stopping";
+/** کدک پشتیبانی‌شده به ترتیب ترجیح (Chromium: webm/opus — Safari: mp4/AAC) */
+const MIME_CANDIDATES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/mp4',
+  'audio/ogg;codecs=opus',
+]
 
-const MAX_RECORDING_SECONDS = 180; // 3 minutes — WhatsApp's limit
+function pickMime(): string {
+  if (typeof MediaRecorder === 'undefined') return ''
+  return MIME_CANDIDATES.find((m) => MediaRecorder.isTypeSupported(m)) ?? ''
+}
 
-export function VoiceRecorder({
-  onSend,
-  disabled,
-  className,
-  onRecordingChange,
-}: VoiceRecorderProps) {
-  const { toast } = useToast();
-  const [state, setState] = React.useState<RecorderState>("idle");
-  const [seconds, setSeconds] = React.useState(0);
+/** سطح لحظه‌ای صدا از آنالایزر (۰ تا ۱) */
+function sampleLevel(analyser: AnalyserNode, buf: Uint8Array<ArrayBuffer>): number {
+  analyser.getByteTimeDomainData(buf)
+  let max = 0
+  for (let i = 0; i < buf.length; i++) {
+    const v = Math.abs(buf[i] - 128) / 128
+    if (v > max) max = v
+  }
+  return Math.min(1, Math.round(max * 100) / 100)
+}
 
-  const recorderRef = React.useRef<MediaRecorder | null>(null);
-  const streamRef = React.useRef<MediaStream | null>(null);
-  const chunksRef = React.useRef<BlobPart[]>([]);
-  const timerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
-  const mimeTypeRef = React.useState<string>("audio/webm")[0];
-  // Keep a ref to the latest onRecordingChange so the setState wrapper
-  // below doesn't need it in its dependency array (avoids re-runs).
-  const onRecordingChangeRef = React.useRef(onRecordingChange);
-  React.useEffect(() => {
-    onRecordingChangeRef.current = onRecordingChange;
-  }, [onRecordingChange]);
+/** نمونه‌برداری مجدد سطوح خام به تعداد ستون موج نهایی */
+function toWaveform(levels: number[], count = WAVE_BARS): number[] | null {
+  if (levels.length < 8) return null
+  const out: number[] = []
+  const block = levels.length / count
+  for (let i = 0; i < count; i++) {
+    const start = Math.floor(i * block)
+    const end = Math.min(levels.length, Math.max(start + 1, Math.floor((i + 1) * block)))
+    let max = 0
+    for (let j = start; j < end; j++) if (levels[j] > max) max = levels[j]
+    out.push(Math.round(max * 100) / 100)
+  }
+  const mx = Math.max(...out, 0.08)
+  return out.map((v) => Math.min(1, v / mx))
+}
 
-  // Wrap setState so we notify the parent whenever the recording state
-  // transitions. "recording" → true; "idle" → false. "stopping" is a
-  // transient state — treat it as recording=true so the parent keeps
-  // the composer hidden until the recording is fully processed.
-  const updateState = React.useCallback((next: RecorderState) => {
-    setState((prev) => {
-      const wasRecording = prev === "recording" || prev === "stopping";
-      const isRecording = next === "recording" || next === "stopping";
-      if (wasRecording !== isRecording) {
-        // Defer the callback so it doesn't fire during React's render
-        // phase (would cause a "Cannot update a component while rendering
-        // a different component" warning).
-        Promise.resolve().then(() => onRecordingChangeRef.current?.(isRecording));
+function faClock(sec: number): string {
+  const s = Math.max(0, Math.floor(sec))
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${new Intl.NumberFormat('fa-IR').format(m)}:${new Intl.NumberFormat('fa-IR', {
+    minimumIntegerDigits: 2,
+  }).format(r)}`
+}
+
+interface VoiceRecorderPanelProps {
+  /** پیام آماده ارسال شد */
+  onDone: (rec: VoiceRecording) => void
+  /** انصراف؛ micDenied = خطای دسترسی میکروفون */
+  onCancel: (micDenied?: boolean) => void
+}
+
+/**
+ * پنل ضبط پیام صوتی — جای ردیف کامپوزر می‌نشیند:
+ * تایمر + موج زنده + انصراف + ارسال؛ سقف ۵ دقیقه با توقف و ارسال خودکار
+ */
+export function VoiceRecorderPanel({ onDone, onCancel }: VoiceRecorderPanelProps) {
+  const [seconds, setSeconds] = useState(0)
+  const [levels, setLevels] = useState<number[]>([])
+  const [finishing, setFinishing] = useState(false)
+  const [micDenied, setMicDenied] = useState(false)
+
+  const recorderRef = useRef<(MediaRecorder & { __chunks?: BlobPart[] }) | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const ctxRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const levelBufRef = useRef<Uint8Array<ArrayBuffer> | null>(null)
+  const levelsRef = useRef<number[]>([])
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const startedAtRef = useRef(0)
+  const finalizedRef = useRef(false)
+
+  const cleanup = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current)
+    timerRef.current = null
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
+    ctxRef.current?.close().catch(() => null)
+    ctxRef.current = null
+    analyserRef.current = null
+  }, [])
+
+  /** انصراف — دوربین قطع و پنل بسته می‌شود */
+  const cancel = useCallback(() => {
+    if (finalizedRef.current) return
+    finalizedRef.current = true
+    try {
+      recorderRef.current?.state !== 'inactive' && recorderRef.current?.stop()
+    } catch {
+      /* ignore */
+    }
+    cleanup()
+    onCancel()
+  }, [cleanup, onCancel])
+
+  /** ارسال — پس از توقف ضبط، Blob از chunks ساخته و تحویل داده می‌شود */
+  const send = useCallback(() => {
+    if (finalizedRef.current) return
+    finalizedRef.current = true
+    setFinishing(true)
+    const rec = recorderRef.current
+    if (!rec || rec.state === 'inactive') {
+      cleanup()
+      onCancel()
+      return
+    }
+    const chunks = rec.__chunks ?? []
+    const duration = Math.max(0.5, (Date.now() - startedAtRef.current) / 1000)
+    rec.onstop = () => {
+      const mime = rec.mimeType || 'audio/webm'
+      const blob = new Blob(chunks, { type: mime })
+      cleanup()
+      const waveform = toWaveform(levelsRef.current)
+      onDone({ blob, mime, duration, waveform })
+    }
+    try {
+      rec.stop()
+    } catch {
+      cleanup()
+      onCancel()
+    }
+  }, [cleanup, onDone, onCancel])
+
+  // شروع ضبط هنگام mount + توقف خودکار در سقف مدت
+  useEffect(() => {
+    let alive = true
+    const mime = pickMime()
+    if (!mime || !navigator.mediaDevices?.getUserMedia) {
+      const t = setTimeout(() => onCancel(), 0)
+      return () => clearTimeout(t)
+    }
+    ;(async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true },
+        })
+        if (!alive) {
+          stream.getTracks().forEach((t) => t.stop())
+          return
+        }
+        streamRef.current = stream
+        const rec = new MediaRecorder(stream, { mimeType: mime }) as MediaRecorder & {
+          __chunks?: BlobPart[]
+        }
+        recorderRef.current = rec
+        rec.__chunks = []
+        rec.ondataavailable = (e) => {
+          if (e.data.size > 0) rec.__chunks!.push(e.data)
+        }
+        startedAtRef.current = Date.now()
+
+        // آنالایزر موج زنده
+        const AC =
+          window.AudioContext ??
+          (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+        if (AC) {
+          const ctx = new AC()
+          ctxRef.current = ctx
+          const src = ctx.createMediaStreamSource(stream)
+          const analyser = ctx.createAnalyser()
+          analyser.fftSize = 256
+          src.connect(analyser)
+          analyserRef.current = analyser
+          levelBufRef.current = new Uint8Array(analyser.frequencyBinCount)
+        }
+
+        rec.start(250)
+
+        // تایمر + نمونه‌برداری موج زنده
+        timerRef.current = setInterval(() => {
+          const elapsed = (Date.now() - startedAtRef.current) / 1000
+          setSeconds(elapsed)
+          const an = analyserRef.current
+          const buf = levelBufRef.current
+          if (an && buf) {
+            const lv = sampleLevel(an, buf)
+            levelsRef.current = [...levelsRef.current, lv].slice(-WAVE_BARS * 3)
+            setLevels((prev) => [...prev, lv].slice(-28))
+          }
+          if (elapsed >= MAX_VOICE_SEC) send()
+        }, 120)
+      } catch {
+        if (!alive) return
+        setMicDenied(true)
+        setTimeout(() => {
+          if (!finalizedRef.current) {
+            finalizedRef.current = true
+            cleanup()
+            onCancel(true)
+          }
+        }, 700)
       }
-      return next;
-    });
-  }, []);
-
-  // Cleanup on unmount.
-  React.useEffect(() => {
+    })()
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      alive = false
+      // اگر هنوز ضبط فعال است (خروج از صفحه) — پاک‌سازی
+      if (!finalizedRef.current) {
+        finalizedRef.current = true
         try {
-          recorderRef.current.stop();
+          recorderRef.current?.stop()
         } catch {
           /* ignore */
         }
       }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
-    };
-  }, []);
-
-  function startTimer() {
-    setSeconds(0);
-    timerRef.current = setInterval(() => {
-      setSeconds((s) => {
-        if (s + 1 >= MAX_RECORDING_SECONDS) {
-          // Auto-stop at the limit.
-          void stopRecording("auto");
-          return s;
-        }
-        return s + 1;
-      });
-    }, 1000);
-  }
-
-  function stopTimer() {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+      cleanup()
     }
-  }
-
-  async function startRecording() {
-    if (disabled || state !== "idle") return;
-
-    // Feature-detect MediaRecorder.
-    if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      toast({
-        title: "ضبط صدا پشتیبانی نمی‌شود",
-        description: "مرورگر شما امکان ضبط صدا را ندارد.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          channelCount: 1,
-        },
-      });
-      streamRef.current = stream;
-
-      // Pick a supported mime type (webm on Chrome, ogg on Firefox).
-      const mimeTypes = ["audio/webm", "audio/ogg", "audio/mp4"];
-      const mimeType = mimeTypes.find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
-      const recorder = mimeType
-        ? new MediaRecorder(stream, { mimeType })
-        : new MediaRecorder(stream);
-      recorderRef.current = recorder;
-      chunksRef.current = [];
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      recorder.onstop = handleRecorderStop;
-
-      recorder.start(100); // collect data in 100ms chunks
-      updateState("recording");
-      startTimer();
-    } catch (err) {
-      const e = err as DOMException;
-      if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
-        toast({
-          title: "دسترسی به میکروفون رد شد",
-          description: "لطفاً دسترسی به میکروفون را در تنظیمات مرورگر فعال کنید.",
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "خطا در شروع ضبط",
-          description: e.message || "خطای غیرمنتظره",
-          variant: "destructive",
-        });
-      }
-      cleanupStream();
-      updateState("idle");
-    }
-  }
-
-  function cleanupStream() {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    recorderRef.current = null;
-    chunksRef.current = [];
-  }
-
-  async function stopRecording(_reason: "manual" | "auto" | "send" = "manual") {
-    if (state !== "recording") return;
-    updateState("stopping");
-    stopTimer();
-    const recorder = recorderRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      // The onstop handler will fire + build the File.
-      try {
-        recorder.stop();
-      } catch {
-        /* ignore */
-      }
-    } else {
-      cleanupStream();
-      updateState("idle");
-    }
-  }
-
-  function handleRecorderStop() {
-    const chunks = chunksRef.current;
-    const mimeType = recorderRef.current?.mimeType || mimeTypeRef;
-    const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
-    cleanupStream();
-
-    if (blob.size === 0) {
-      toast({
-        title: "ضبط ناموفق بود",
-        description: "هیچ صدایی ضبط نشد.",
-        variant: "destructive",
-      });
-      updateState("idle");
-      return;
-    }
-
-    // Build a File with a friendly name.
-    const ext = mimeType.includes("ogg")
-      ? "ogg"
-      : mimeType.includes("mp4")
-        ? "mp4"
-        : "webm";
-    const filename = `voice-${Date.now()}.${ext}`;
-    const file = new File([blob], filename, { type: mimeType || "audio/webm" });
-    updateState("idle");
-    void onSend(file);
-  }
-
-  function cancelRecording() {
-    // Stop the recorder but discard the data.
-    stopTimer();
-    const recorder = recorderRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      // Detach the onstop handler so it doesn't fire onSend.
-      recorder.onstop = null;
-      try {
-        recorder.stop();
-      } catch {
-        /* ignore */
-      }
-    }
-    cleanupStream();
-    updateState("idle");
-  }
-
-  // ---------- Idle state: just the Mic trigger ----------
-  if (state === "idle") {
-    return (
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        disabled={disabled}
-        onClick={() => void startRecording()}
-        className={cn("size-9 shrink-0", className)}
-        aria-label="ضبط پیام صوتی"
-        title="ضبط پیام صوتی"
-      >
-        <Mic className="size-5" />
-      </Button>
-    );
-  }
-
-  // ---------- Recording / stopping state: the recording UI ----------
-  const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
-  const ss = String(seconds % 60).padStart(2, "0");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
-    <div className="flex flex-1 items-center gap-2">
-      {/* Red pulsing dot */}
-      <span className="relative flex size-3 shrink-0 items-center justify-center">
-        <span className="absolute inline-flex size-full animate-ping rounded-full bg-red-500 opacity-60" />
-        <span className="relative inline-flex size-3 rounded-full bg-red-500" />
-      </span>
-      <span className="text-xs font-medium text-red-600 dark:text-red-400">
-        {state === "stopping" ? "در حال پایان…" : "در حال ضبط"}
-      </span>
-
-      {/* Timer */}
-      <span className="font-mono text-sm tabular-nums text-foreground persian-nums" dir="ltr">
-        {toPersianDigits(mm)}:{toPersianDigits(ss)}
-      </span>
-
-      {/* Fake waveform — animated bars */}
-      <div className="flex flex-1 items-center gap-0.5 overflow-hidden px-2">
-        {Array.from({ length: 24 }).map((_, i) => (
-          <span
-            key={i}
-            className="inline-block w-0.5 shrink-0 animate-pulse rounded-full bg-muted-foreground/40"
-            style={{
-              height: `${4 + ((i * 7) % 16)}px`,
-              animationDelay: `${i * 60}ms`,
-              animationDuration: "0.8s",
-            }}
-          />
-        ))}
-      </div>
-
-      {/* Cancel button */}
+    <div className="flex items-center gap-2 p-2.5" dir="rtl">
+      {/* انصراف */}
       <Button
-        type="button"
         variant="ghost"
         size="icon"
-        onClick={cancelRecording}
-        disabled={state === "stopping"}
-        className="size-9 shrink-0 text-destructive hover:bg-destructive/10"
-        aria-label="لغو ضبط"
-        title="لغو"
+        className="shrink-0 text-destructive hover:text-destructive"
+        onClick={cancel}
+        disabled={finishing}
+        aria-label="انصراف از ضبط"
+        title="حذف پیام صوتی"
       >
-        <X className="size-5" />
+        <Trash2 className="h-5 w-5" />
       </Button>
 
-      {/* Send (stop + send) button */}
-      <Button
-        type="button"
-        size="icon"
-        onClick={() => void stopRecording("send")}
-        disabled={state === "stopping"}
-        className="size-9 shrink-0"
-        aria-label="ارسال پیام صوتی"
-        title="ارسال"
+      {/* موج زنده + تایمر */}
+      <div
+        className={cn(
+          'flex-1 flex items-center gap-2 rounded-xl px-3 py-2.5 min-w-0',
+          micDenied ? 'bg-destructive/10' : 'bg-muted/60',
+        )}
       >
-        {state === "stopping" ? (
-          <Loader2 className="size-5 animate-spin" />
+        {micDenied ? (
+          <span className="text-xs text-destructive truncate">دسترسی میکروفون داده نشد</span>
         ) : (
-          <Send className="size-5" />
+          <>
+            <span className="h-2.5 w-2.5 rounded-full bg-destructive animate-pulse shrink-0" />
+            <span className="text-xs tabular-nums text-muted-foreground shrink-0">
+              {faClock(seconds)}
+            </span>
+            <div className="flex items-center gap-[2px] h-6 flex-1 min-w-0 overflow-hidden">
+              {levels.map((lv, i) => (
+                <span
+                  key={i}
+                  className="flex-1 min-w-[2px] max-w-[5px] rounded-full bg-primary/70"
+                  style={{ height: `${Math.min(100, Math.max(10, lv * 100))}%` }}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ارسال */}
+      <Button
+        size="icon"
+        className="shrink-0"
+        onClick={send}
+        disabled={finishing || micDenied}
+        aria-label="ارسال پیام صوتی"
+        title="ارسال پیام صوتی"
+      >
+        {finishing ? (
+          <Loader2 className="h-4.5 w-4.5 animate-spin" />
+        ) : (
+          <Check className="h-5 w-5" />
         )}
       </Button>
     </div>
-  );
+  )
 }

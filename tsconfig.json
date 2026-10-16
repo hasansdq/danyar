@@ -38,14 +38,6 @@
   ],
   "exclude": [
     "node_modules",
-    "skills",
-    "tests",
-    "examples",
-    "mini-services",
-    "upload",
-    "download",
-    "agent-ctx",
-    "tool-results",
-    "public/uploads"
+    "skills"
   ]
 }

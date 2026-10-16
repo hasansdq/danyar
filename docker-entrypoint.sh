@@ -1,101 +1,120 @@
-#!/bin/bash
-# ============================================================
-# docker-entrypoint.sh — Next.js production container (runs as appuser)
+#!/bin/sh
+# راه‌انداز دانیار — سه حالت مجزا (هر کدام یک پراسس، بدون پس‌زمینه):
+#   migrate → اعمال مهاجرت‌های ایمن + اطمینان از حساب مدیر کل (سپس خروج)
+#   web     → سرور Next.js (کاربر غیر root)
+#   socket  → سرویس Socket.IO (کاربر غیر root)
 #
-# SECURITY:
-#  - Secrets (NEXTAUTH_SECRET, SOCKET_AUTH_SECRET) are validated UP FRONT —
-#    the container refuses to start without them (no fallbacks, ever).
-#  - ADMIN_PASSWORD is REQUIRED in production (never generated, never printed).
-#  - SEED_DEMO_DATA=true is FORBIDDEN in production — deployment stops.
-#  - Database schema is managed EXCLUSIVELY with `prisma migrate deploy`.
-#    NO `prisma db push`, NO `--accept-data-loss` in production.
-#  - Migration failures are fatal; no automatic legacy baselining.
-#  - Seeding is idempotent and retried on restart: a SiteSetting marker
-#    (`seed_completed`) is written only after a fully successful seed, so a
-#    crashed seed re-runs on the next container start WITHOUT duplicates.
-# ============================================================
+# قواعد ایمنی داده:
+#   • پیش از هر تغییر دیتابیس، پشتیبان آنلاین گرفته می‌شود (سپر داده)
+#   • وضعیت پایه (baseline) فقط پس از تأیید تطابق واقعی schema دیتابیس موجود
+#     با یکی از وضعیت‌های زنجیره مهاجرت‌ها ثبت می‌شود (diff پیشوندی)
+#   • ثبت وضعیت پایه هرگز داده‌ای تغییر نمی‌دهد؛ دیتابیس غیرمطابق = توقف کامل
 set -e
 
-log() { echo "[entrypoint] $*"; }
-fatal() {
-  echo "[entrypoint] FATAL: $*" >&2
-  exit 1
-}
+MODE="${1:-web}"
+DB_PATH="${DATABASE_URL#file:}"
+DATA_DIR="$(dirname "$DB_PATH")"
 
-log "Starting Daniyar messenger..."
+case "$MODE" in
+  migrate)
+    mkdir -p "$DATA_DIR/uploads" "$DATA_DIR/backups"
 
-# ---------- 1) Secret validation (fail closed, no fallbacks) ----------
-if [ -z "$NEXTAUTH_SECRET" ] || [ "${#NEXTAUTH_SECRET}" -lt 16 ]; then
-  fatal "NEXTAUTH_SECRET is missing or shorter than 16 chars. Generate one with: openssl rand -base64 32"
-fi
-if [ -z "$SOCKET_AUTH_SECRET" ] || [ "${#SOCKET_AUTH_SECRET}" -lt 16 ]; then
-  fatal "SOCKET_AUTH_SECRET is missing or shorter than 16 chars. It must be IDENTICAL in nextjs, chat-service and classroom-service. Generate one with: openssl rand -base64 32"
-fi
+    PRISMA="node node_modules/prisma/build/index.js"
+    MIGDIR="prisma/migrations"
 
-# ---------- 2) Production-only guards ----------
-if [ "${NODE_ENV:-production}" = "production" ]; then
-  if [ -z "$ADMIN_PASSWORD" ]; then
-    fatal "ADMIN_PASSWORD is required in production. Set it in .env — it is never generated or printed."
-  fi
-  if [ "${SEED_DEMO_DATA:-false}" = "true" ]; then
-    fatal "SEED_DEMO_DATA=true is forbidden in production (demo users have known passwords). Remove it from .env and redeploy."
-  fi
-fi
+    # ─── سپر داده: پیش از هرگونه تغییر دیتابیس (حتی baseline) یک پشتیبان آنلاین امن ───
+    # هر به‌روزرسانی/راه‌اندازیِ مهاجرت‌دار، اول یک تصویر لحظه‌ای سالم داخل خود ولوم می‌سازد؛
+    # حتی اگر مالک بدون scripts/update.sh آپدیت کند، داده‌ها قابل بازیابی می‌مانند.
+    if [ -s "$DB_PATH" ] && [ "${DANIAR_SKIP_PRE_MIGRATE_BACKUP:-0}" != "1" ]; then
+      STAMP="$(date +%Y%m%d-%H%M%S)"
+      SNAP="$DATA_DIR/backups/pre-migrate-$STAMP.db"
+      echo "[daniar] سپر داده — پشتیبان خودکار پیش از مهاجرت → $SNAP …"
+      if sqlite3 "$DB_PATH" ".backup '$SNAP'" \
+         && [ "$(sqlite3 "$SNAP" 'PRAGMA integrity_check;')" = "ok" ]; then
+        echo "[daniar] ✔ پشتیبان پیش از مهاجرت سالم ثبت شد (۷ نسخه آخر نگه داشته می‌شوند)"
+        ls -1t "$DATA_DIR"/backups/pre-migrate-*.db 2>/dev/null | tail -n +8 | xargs -r rm -f
+      else
+        rm -f "$SNAP" 2>/dev/null || true
+        echo "[daniar] ✘ ساخت پشتیبان پیش از مهاجرت ناموفق بود — برای محافظت از داده‌ها مهاجرت متوقف شد." >&2
+        echo "[daniar]   فضای دیسک ولوم را بررسی کنید؛ در صورت اطمینان، فقط یک‌بار و آگاهانه با" >&2
+        echo "[daniar]   DANIAR_SKIP_PRE_MIGRATE_BACKUP=1 می‌توانید این سپر را رد کنید (توصیه نمی‌شود)." >&2
+        exit 1
+      fi
+    fi
 
-# ---------- 3) Data directories ----------
-mkdir -p /data/db /data/uploads
+    if [ -f "$DB_PATH" ]; then
+      # دیتابیس موجود که با db push ساخته شده و جدول مهاجرت ندارد → وضعیت پایه
+      TABLES=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+      HAS_MIG=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_prisma_migrations';")
+      if [ "$TABLES" -gt 0 ] && [ "$HAS_MIG" = "0" ]; then
+        if [ "${DANIAR_BASELINE_FORCE:-0}" = "1" ]; then
+          echo "[daniar] ⚠ DANIAR_BASELINE_FORCE=1 — ثبت همه مهاجرت‌ها به‌عنوان اعمال‌شده بدون تأیید ساختار (مسئولیت با اجراکننده)…"
+          for m in $(ls -1d "$MIGDIR"/*/ | sort); do
+            $PRISMA migrate resolve --applied "$(basename "$m")"
+          done
+        else
+          echo "[daniar] دیتابیس موجود بدون جدول مهاجرت — تطابق واقعی schema با زنجیره مهاجرت‌ها بررسی می‌شود…"
+          TMPD="$DATA_DIR/.baseline-check"
+          rm -rf "$TMPD"; mkdir -p "$TMPD"
+          MIGS="$(ls -1d "$MIGDIR"/*/ | sort)"
+          MATCHED=""; MATCHN=0
+          i=0
+          for m in $MIGS; do
+            i=$((i+1))
+            SHADOW="$TMPD/shadow-$i.db"
+            # ساخت وضعیت پایه پیشوندی: اعمال مهاجرت‌های ۱..i روی دیتابیس خالیِ موقت
+            j=0
+            for m2 in $MIGS; do
+              j=$((j+1))
+              sqlite3 "$SHADOW" < "$m2/migration.sql"
+              [ "$j" -ge "$i" ] && break
+            done
+            if $PRISMA migrate diff --from-url "file:$SHADOW" --to-url "file:$DB_PATH" --exit-code >/dev/null 2>&1; then
+              MATCHED="$m"; MATCHN="$i"
+              break
+            fi
+          done
+          if [ -z "$MATCHED" ]; then
+            echo "[daniar] ✘ ساختار دیتابیس موجود با هیچ وضعیت پایه‌ای از مهاجرت‌ها مطابقت ندارد." >&2
+            echo "[daniar]   برای حفظ داده‌ها، مهاجرت متوقف شد — هیچ تغییری اعمال نشده است." >&2
+            echo "[daniar]   گزینه‌ها:" >&2
+            echo "[daniar]    • بازیابی از پشتیبان هم‌نسخه: scripts/restore.sh" >&2
+            echo "[daniar]    • اگر مطمئنید دیتابیس متعلق به همین پروژه است: DANIAR_BASELINE_FORCE=1" >&2
+            echo "[daniar]      (ثبت همه مهاجرت‌ها بدون تأیید ساختار — توصیه نمی‌شود)" >&2
+            rm -rf "$TMPD"
+            exit 1
+          fi
+          echo "[daniar] ✔ تطابق کامل با وضعیت پایه «$(basename "$MATCHED")» — ثبت مهاجرت‌های ۱..$MATCHN (بدون هیچ تغییر روی داده)…"
+          k=0
+          for m in $MIGS; do
+            k=$((k+1))
+            [ "$k" -gt "$MATCHN" ] && break
+            $PRISMA migrate resolve --applied "$(basename "$m")"
+          done
+          rm -rf "$TMPD"
+        fi
+      fi
+    fi
+    echo "[daniar] اعمال مهاجرت‌های Prisma (deploy — هرگز داده حذف/تغییر نمی‌کند)…"
+    $PRISMA migrate deploy
 
-# Symlink public/uploads → /data/uploads so Next.js serves uploaded files
-# from the persistent volume (creates the link if it doesn't exist).
-if [ ! -L /app/public/uploads ]; then
-  rm -rf /app/public/uploads 2>/dev/null || true
-  ln -sf /data/uploads /app/public/uploads
-  log "Linked /app/public/uploads → /data/uploads"
-fi
+    echo "[daniar] اطمینان از حساب مدیر کل (رمز فقط از تنظیمات مالک؛ حساب‌های موجود تغییر نمی‌کنند)…"
+    node prisma/seed.mjs
+    echo "[daniar] مهاجرت‌ها کامل شد."
+    ;;
 
-# ---------- 4) Database migrations (migrate deploy ONLY) ----------
-DB_PROVIDER="sqlite"
-case "$DATABASE_URL" in
-  postgresql://*|postgres://*) DB_PROVIDER="postgres" ;;
+  web)
+    echo "[daniar] اجرای Next.js روی :3000 (کاربر غیر root)…"
+    exec node server.js
+    ;;
+
+  socket)
+    echo "[daniar] اجرای سرویس Socket.IO روی :3003 (کاربر غیر root)…"
+    exec node socket-server.mjs
+    ;;
+
+  *)
+    echo "[daniar] حالت نامعتبر: '$MODE' — از migrate | web | socket استفاده کنید" >&2
+    exit 1
+    ;;
 esac
-log "Database provider: $DB_PROVIDER"
-
-# Apply migrations; any error stops startup. Legacy DB baseline requires manual schema verification.
-MIGRATE_LOG="$(mktemp)"
-if ! bunx prisma migrate deploy >"$MIGRATE_LOG" 2>&1; then
-  cat "$MIGRATE_LOG" # surface the actual error for diagnosis
-  fatal "Migration failed. Imported legacy databases must be schema-verified and baselined manually; no migrations are automatically marked applied."
-fi
-rm -f "$MIGRATE_LOG"
-log "Migrations applied."
-
-# ---------- 5) Seeding (idempotent, restart-safe) ----------
-# The seed writes a `seed_completed` SiteSetting marker ONLY at the very end
-# of a fully successful run. Marker present → skip. Marker absent (fresh DB
-# OR a previously crashed seed) → run the seed again; every record is
-# created via upsert/guarded-create, so re-runs NEVER duplicate.
-# A failed seed is FATAL: the container exits and restart: unless-stopped
-# retries the whole entrypoint (migrate deploy is a no-op by then).
-SEED_MARKER=$(DATABASE_URL="$DATABASE_URL" bun -e "
-const { PrismaClient } = require('@prisma/client');
-const p = new PrismaClient();
-p.siteSetting
-  .findUnique({ where: { key: 'seed_completed' } })
-  .then((r) => { console.log(r ? 'done' : 'pending'); return p.\$disconnect(); })
-  .catch(() => { console.log('pending'); process.exit(0); });
-" 2>/dev/null || echo "pending")
-
-if [ "$SEED_MARKER" = "done" ]; then
-  log "Seed already completed (marker present) — skipping."
-else
-  log "Seeding required (fresh database or incomplete previous seed)..."
-  if bun run scripts/seed.ts; then
-    log "Seed completed successfully."
-  else
-    fatal "Seed failed. The deployment stops here; the container will restart and retry the (idempotent) seed automatically."
-  fi
-fi
-
-# ---------- 6) Start the Next.js server ----------
-log "Starting Next.js server on port 3000..."
-exec "$@"
