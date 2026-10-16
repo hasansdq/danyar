@@ -75,7 +75,7 @@ export function SchoolDetailView({
           { cache: 'no-store' },
         )
         if (!r.ok) {
-          throw new Error((await r.json().catch(() => null)?.error) ?? `کد ${r.status}`)
+          throw new Error(((await r.json().catch(() => null))?.error) ?? `کد ${r.status}`)
         }
         const d = (await r.json()) as SchoolDetailData
         setData(d)
