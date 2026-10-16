@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
         credential: s.credential,
       }
     })
-    .filter((s): s is { urls: string[]; username?: string; credential?: string } => s !== null)
+    .filter((s): s is NonNullable<typeof s> => s !== null)
 
   return infraJson({
     configured: servers.length > 0,
