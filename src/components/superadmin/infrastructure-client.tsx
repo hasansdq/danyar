@@ -95,11 +95,11 @@ export function InfrastructureClient() {
     if (!silent) setRefreshing(true)
     const results = await Promise.allSettled([
       fetch('/api/superadmin/infrastructure/overview', { cache: 'no-store' }).then(async (r) => {
-        if (!r.ok) throw new Error((await r.json().catch(() => null)?.error) ?? `کد ${r.status}`)
+        if (!r.ok) throw new Error(((await r.json().catch(() => null))?.error) ?? `کد ${r.status}`)
         return (await r.json()) as OverviewData
       }),
       fetch('/api/superadmin/infrastructure/resources', { cache: 'no-store' }).then(async (r) => {
-        if (!r.ok) throw new Error((await r.json().catch(() => null)?.error) ?? `کد ${r.status}`)
+        if (!r.ok) throw new Error(((await r.json().catch(() => null))?.error) ?? `کد ${r.status}`)
         return (await r.json()) as ResourcesData
       }),
       fetch('/api/superadmin/infrastructure/events?count=50', { cache: 'no-store' }).then(async (r) => {
