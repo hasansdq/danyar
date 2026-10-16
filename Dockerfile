@@ -36,6 +36,14 @@ RUN bun build mini-services/socket-server/index.ts --target node \
     --external @prisma/client \
     --outfile socket-server.mjs
 
+# Complete production dependency graph, including Prisma CLI transitive packages.
+FROM oven/bun:1 AS runtime-deps
+WORKDIR /app
+COPY package.json bun.lock ./
+COPY prisma/schema.prisma ./prisma/schema.prisma
+RUN bun install --production --frozen-lockfile
+RUN bunx prisma generate
+
 # ─── مرحله ۲: اجرا با Node glibc (سازگار با موتورهای Prisma و sharp) ───
 FROM node:20-bookworm-slim AS runner
 
@@ -57,13 +65,13 @@ ENV PRISMA_HIDE_UPDATE_MESSAGE=1
 # خروجی standalone این Next.js (اسکریپت build، static و public را هم داخل آن کپی می‌کند)
 COPY --from=builder /app/.next/standalone ./
 
-# Prisma برای migrate deploy/resolve + اسکریپت seed
+# Copy all production dependencies: selective Prisma copies omit packages such as effect.
+COPY --from=runtime-deps /app/node_modules ./node_modules
 COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-# کلاینت تولیدشده + موتورهای واقعی کوئری/اسکیما (برای server.js، seed.mjs و socket-server.mjs)
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
+
+# Fail the image build if the migration CLI or native runtime dependencies cannot load.
+RUN node node_modules/prisma/build/index.js --version \
+    && node -e "require('@prisma/client'); require('sharp')"
 
 # سرویس Socket.IO مستقل
 COPY --from=builder /app/socket-server.mjs ./socket-server.mjs
