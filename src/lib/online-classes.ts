@@ -203,9 +203,12 @@ export async function computeOnlineClassesStats(
     take: PEAK_MAX_ROWS + 1,
   })
   const approximate = logs.length > PEAK_MAX_ROWS
-  const peak = approximate
-    ? peakConcurrencyFromLogs(logs.slice(0, PEAK_MAX_ROWS))
-    : peakConcurrencyFromLogs(logs)
+  const peakLogs = logs.slice(0, PEAK_MAX_ROWS).map((log) => ({
+    joinedAt: log.joinedAt,
+    leftAt: log.leftAt,
+    sessionEndedAt: log.session.endedAt,
+  }))
+  const peak = peakConcurrencyFromLogs(peakLogs)
 
   const durationsMin = endedSessions
     .filter((s) => s.endedAt)
