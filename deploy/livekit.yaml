@@ -1,0 +1,37 @@
+# ─── پیکربندی سرور LiveKit SFU دانیار (فقط شبکه داخلی Docker) ───
+# این فایل داخل کانتینر خوانده می‌شود؛ کلیدهای API از متغیر محیطی
+# LIVEKIT_KEYS می‌آیند (بدون هیچ کلید پیش‌فرض — docker-compose الزام می‌کند).
+
+port: 7880
+bind_addresses:
+  - 0.0.0.0
+
+rtc:
+  # یک پورت UDP چندپلکس‌شده برای همه جلسات + فالبک TCP
+  udp_port: 7882
+  tcp_port: 7881
+  # تشخیص خودکار IP با STUN خارجی خاموش است: در شبکه‌های محدود (و پشت NAT
+  # سخت) به «could not resolve external IP» و کرش‌لوپ می‌رسید.
+  # IP عمومی VPS با فلگ بومی «--node-ip» از .env (LIVEKIT_NODE_IP) پاس می‌شود
+  # — deploy.sh وقتی پروفایل media فعال است، این متغیر را الزامی می‌کند
+  # (رفتار با باینری v1.13.9 تست‌شده: بدون STUN بالا می‌آید و nodeIP دقیقاً
+  # همان IP عمومی تبلیغ می‌شود).
+  use_external_ip: false
+  congestion_control:
+    # روی ازدحام، ویدیوی مشترک‌شونده به‌طور موقت توقف می‌شود تا صدا و بقیه ترک‌ها روان بمانند
+    allow_pause: true
+
+# TURN داخلی غیرفعال — TURN مستقل (coturn) در سرویس جدا/سرور جدا مستقر می‌شود؛
+# TURN مسیر اضطراری رسانه است و هرگز جایگزین SFU نیست
+turn:
+  enabled: false
+
+room:
+  # اتاق خالی پس از ۱۰ دقیقه خودکار بسته می‌شود (جداسازی جلسات حفظ می‌شود)
+  empty_timeout: 600
+  # سقف نرم سرور؛ سقف واقعی هر جلسه با توکن (LIVE_MAX_PARTICIPANTS) اعمال می‌شود
+  max_participants: 64
+
+logging:
+  level: info
+  json: false

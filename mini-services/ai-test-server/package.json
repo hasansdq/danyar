@@ -1,0 +1,7 @@
+{
+  "name": "ai-test-server",
+  "private": true,
+  "scripts": {
+    "dev": "bun index.mjs"
+  }
+}

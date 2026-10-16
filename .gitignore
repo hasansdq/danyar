@@ -32,7 +32,6 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
-!.env.example
 
 # vercel
 .vercel
@@ -53,12 +52,30 @@ prompt
 server.log
 # Skills directory
 /skills/
-# Private runtime data and development history
-/db/
-/public/uploads/
-/backups/
-worklog.md
-*.db
+.tools/.watchdog-media-mode
+.zscripts/*.pid
+
+# ─── مصنوعات build/اجرای محلی — هرگز در گیت نیستند (ریپو سبک می‌ماند) ───
+# بستهٔ استقرار با scripts/rebuild-deploy-archive.sh از فایل‌های tracked ساخته می‌شود؛
+# استقرار داکر socket-server.mjs را داخل ایمیج از سورس می‌سازد (Dockerfile) و
+# دیتابیس VPS با migrations+seed ساخته می‌شود — هیچ‌کدام لازم نیستند tracked باشند.
+/download/
+/upload/
+/tool-results/
+/socket-server.mjs
+/.tools/livekit-server
+/.tools/bin/
+/db/*.db
+/prisma/dev.db
+/tmp-archive-*
+# رسانه‌های runtime آپلود کاربران (فقط .gitkeep نگه داشته می‌شود)
+/uploads/*
+!/uploads/.gitkeep
+
+# Local preview credentials and generated delivery archives
+!.env.example
+/.tools/turnserver
+/.tools/turnserver-preview.conf
+/public/*repo*.tar.gz
 *.db-wal
 *.db-shm
-*.bak

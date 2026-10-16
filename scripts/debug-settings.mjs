@@ -1,0 +1,23 @@
+import { chromium } from 'file:///home/z/.npm-global/lib/node_modules/playwright/index.mjs'
+const BASE = 'http://localhost:3034'
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const browser = await chromium.launch()
+const ctx = await browser.newContext()
+await ctx.grantPermissions(['notifications'], { origin: BASE })
+const page = await ctx.newPage()
+await page.goto(BASE + '/login')
+await page.fill('#username', 'beheshti.admin')
+await page.fill('#password', 'Pass@123')
+const rb = page.locator('[role="checkbox"][aria-label="من ربات نیستم"]')
+for (let i = 0; i < 10; i++) { if ((await rb.getAttribute('aria-checked')) === 'true') break; await rb.click().catch(() => {}); await sleep(300) }
+await page.click('button[type="submit"]')
+await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 20000 })
+await page.goto(BASE + '/settings')
+await sleep(4000)
+const buttons = await page.locator('button').allInnerTexts()
+console.log('BUTTONS:', JSON.stringify(buttons.filter(t => t.trim()).slice(0, 25)))
+const body = await page.locator('body').innerText()
+console.log('PUSH-RELATED TEXT:', body.split('\n').filter(l => /اعلان|پوش|push/i.test(l)).slice(0, 12).join(' | '))
+await page.screenshot({ path: '.verify-runtime/shots/debug-settings.png', fullPage: true })
+await browser.close()
+process.exit(0)
