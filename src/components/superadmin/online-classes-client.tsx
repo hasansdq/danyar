@@ -91,14 +91,14 @@ export function OnlineClassesClient() {
           fetch(`/api/superadmin/online-classes/schools?${params}`, { cache: 'no-store' }).then(
             async (r) => {
               if (!r.ok)
-                throw new Error((await r.json().catch(() => null)?.error) ?? `کد ${r.status}`)
+                throw new Error(((await r.json().catch(() => null))?.error) ?? `کد ${r.status}`)
               return (await r.json()) as SchoolsListData
             },
           ),
           fetch(`/api/superadmin/online-classes/stats?range=${range}`, { cache: 'no-store' }).then(
             async (r) => {
               if (!r.ok)
-                throw new Error((await r.json().catch(() => null)?.error) ?? `کد ${r.status}`)
+                throw new Error(((await r.json().catch(() => null))?.error) ?? `کد ${r.status}`)
               return (await r.json()) as StatsData
             },
           ),
