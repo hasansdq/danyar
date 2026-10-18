@@ -19,6 +19,8 @@ export interface SessionPayload {
   schoolId: string | null
   /** در حالت جعل هویت: شناسه مدیر کل اصلی */
   impersonatedBy?: string
+  /** ورود با رمز پیش‌فرض (123456) — کاربر باید پیش از ادامه رمز خود را تغییر دهد (درخواست کاربر) */
+  pwdDefault?: boolean
 }
 
 const COOKIE_NAME = 'daniar_session'
@@ -71,6 +73,7 @@ export async function verifySessionToken(
       role: payload.role as Role,
       schoolId: (payload.schoolId as string | null) ?? null,
       ...(payload.impBy ? { impersonatedBy: String(payload.impBy) } : {}),
+      ...(payload.pwdDefault ? { pwdDefault: true } : {}),
     }
   } catch {
     return null

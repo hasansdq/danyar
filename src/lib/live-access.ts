@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import type { SessionPayload } from '@/lib/session'
 import { parseFeatures } from '@/lib/features'
+import { viceHasPermission } from '@/lib/vice-permissions'
 
 /**
  * موتور دسترسی کلاس آنلاین — همه بررسی‌ها سمت سرور انجام می‌شود.
@@ -70,13 +71,17 @@ export async function teacherAssignedToClassroom(
   return !!assigned
 }
 
-/** دسترسی دیدن جلسه: معلم منتسب، دانش‌آموز ثبت‌نام‌شده همان کلاس، مدیر/معاون همان مدرسه */
+/** دسترسی دیدن جلسه: معلم منتسب، دانش‌آموز ثبت‌نام‌شده همان کلاس، مدیر/معاون همان مدرسه (معاون با مجوز live) */
 export async function canAccessClassroom(
   session: SessionPayload,
   classroom: { id: string; schoolId: string },
 ): Promise<boolean> {
   if (!session.schoolId || session.schoolId !== classroom.schoolId) return false
-  if (session.role === 'SCHOOL_ADMIN' || session.role === 'SCHOOL_VICE') return true
+  if (session.role === 'SCHOOL_ADMIN') return true
+  if (session.role === 'SCHOOL_VICE') {
+    // معاون: ورود به استریم قابل محدودیت از طرف مدیر مدرسه است
+    return viceHasPermission(session, 'live')
+  }
   if (session.role === 'TEACHER') {
     return teacherAssignedToClassroom(session.uid, classroom.id)
   }
@@ -133,14 +138,21 @@ export function getLiveSessionById(id: string) {
   }) as Promise<LiveSessionFull | null>
 }
 
-/** آیا این کاربر می‌تواند جلسه را پایان دهد؟ (معلم میزبان یا مدیر/معاون همان مدرسه) */
+/** آیا این کاربر می‌تواند جلسه را پایان دهد؟ (معلم میزبان یا مدیر/معاون همان مدرسه — معاون با مجوز live) */
 export async function canEndLiveSession(
   session: SessionPayload,
   live: { hostId: string; classroom: { schoolId: string } },
 ): Promise<boolean> {
   if (session.role === 'TEACHER') return live.hostId === session.uid
-  if (session.role === 'SCHOOL_ADMIN' || session.role === 'SCHOOL_VICE') {
+  if (session.role === 'SCHOOL_ADMIN') {
     return !!session.schoolId && session.schoolId === live.classroom.schoolId
+  }
+  if (session.role === 'SCHOOL_VICE') {
+    return (
+      !!session.schoolId &&
+      session.schoolId === live.classroom.schoolId &&
+      viceHasPermission(session, 'live')
+    )
   }
   return false
 }

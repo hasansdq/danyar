@@ -43,6 +43,16 @@ export async function proxy(req: NextRequest) {
     (await verifySessionToken(req.cookies.get(SESSION_COOKIE_NAME)?.value))
   const role = session?.role
 
+  /** تغییر رمز اجباری (درخواست کاربر): کاربرِ واردشده با رمز پیش‌فرض (123456) فقط
+   * می‌تواند رمز خود را در تنظیمات عوض کند یا خارج شود؛ بقیهٔ صفحات قفل است. */
+  if (session?.pwdDefault) {
+    const allowed =
+      pathname === '/login' || pathname === '/settings' || pathname.startsWith('/settings/')
+    if (!allowed) {
+      return NextResponse.redirect(new URL('/settings?force=1', req.url))
+    }
+  }
+
   /** هدایت به ورود با حفظ مقصد — پس از ورود به همان مسیر برمی‌گردد (مثلاً کلیک اعلان) */
   const loginRedirect = () => {
     const url = new URL('/login', req.url)
@@ -109,19 +119,20 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(new URL(target, req.url))
   }
 
-  // پنل مدیریت مدرسه (جدا از پیام‌رسان)
+  // پنل مدیریت مدرسه (جدا از پیام‌رسان) — مدیر و معاون (معاون همهٔ دسترسی‌ها را دارد؛
+  // محدودیت‌های هر معاون در سطح صفحه/API از VicePermission اعمال می‌شود)
   if (pathname.startsWith('/modir')) {
     if (!session) return loginRedirect()
-    if (role !== 'SCHOOL_ADMIN')
+    if (role !== 'SCHOOL_ADMIN' && role !== 'SCHOOL_VICE')
       return NextResponse.redirect(new URL(homeFor(role!), req.url))
     return NextResponse.next()
   }
 
-  // گفتگوی دستیار هوش مصنوعی — فقط مدیر مدرسه
+  // گفتگوی دستیار هوش مصنوعی — مدیر و معاون مدرسه (مجوز ai_assistant در سطح API)
   if (pathname === '/assistant' || pathname.startsWith('/assistant/')) {
     if (!session) return loginRedirect()
     if (role === 'SUPER_ADMIN') return NextResponse.redirect(new URL('/admin', req.url))
-    if (role !== 'SCHOOL_ADMIN')
+    if (role !== 'SCHOOL_ADMIN' && role !== 'SCHOOL_VICE')
       return NextResponse.redirect(new URL(homeFor(role!), req.url))
     return NextResponse.next()
   }
@@ -131,11 +142,17 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(new URL(homeFor(role || 'STUDENT'), req.url))
   }
 
-  // گفتگوها، داشبورد، تنظیمات، تکالیف، کلاس آنلاین، اعلان‌ها، حضور و غیاب، نمونه‌سؤالات: نقش‌های اپ
+  // تنظیمات — برای همهٔ نقش‌ها از جمله مدیر کل (درخواست کاربر: همه کاربران بتوانند
+  // از آیکون چرخ‌دنده رمز خود را تغییر دهند)
+  if (pathname === '/settings' || pathname.startsWith('/settings/')) {
+    if (!session) return loginRedirect()
+    return NextResponse.next()
+  }
+
+  // گفتگوها، داشبورد، تکالیف، کلاس آنلاین، اعلان‌ها، حضور و غیاب، نمونه‌سؤالات: نقش‌های اپ
   if (
     pathname.startsWith('/chats/') ||
     pathname.startsWith('/dashboard') ||
-    pathname.startsWith('/settings') ||
     pathname.startsWith('/assignments') ||
     pathname.startsWith('/live') ||
     pathname.startsWith('/notifications') ||
@@ -168,7 +185,10 @@ export const config = {
     '/modir/:path*',
     '/chats/:path*',
     '/dashboard/:path*',
+    '/settings',
     '/settings/:path*',
+    '/calendar',
+    '/calendar/:path*',
     '/assignments/:path*',
     '/assignments',
     '/live/:path*',

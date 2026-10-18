@@ -24,9 +24,8 @@ METRICS=(مدارس کلاس‌ها گروه‌ها کاربران پیام‌ه
 
 echo "── ۱) پشتیبان خودکار پیش از به‌روزرسانی ──"
 bash scripts/backup.sh ./backups || {
-  echo "⚠ پشتیبان‌گیری ناموفق بود." >&2
-  read -r -p "ادامه بدون پشتیبان؟ [y/N] " OK
-  [ "${OK:-n}" = "y" ] || exit 1
+  echo "✘ پشتیبان‌گیری ناموفق بود؛ برای حفظ داده‌ها آپدیت متوقف شد." >&2
+  exit 1
 }
 
 echo "── ۲) شمارش داده‌های حیاتی پیش از آپدیت ──"
@@ -75,6 +74,10 @@ if [ -n "$BEFORE" ]; then
   done
   INTEGRITY="$(docker compose exec -T web sqlite3 /data/daniar.db 'PRAGMA integrity_check;' 2>/dev/null || true)"
   echo "  یکپارچگی دیتابیس: ${INTEGRITY:-نامشخص}"
+  if [ "$INTEGRITY" != "ok" ]; then
+    echo "  ✘ یکپارچگی دیتابیس تأیید نشد؛ آپدیت موفق اعلام نمی‌شود. پشتیبان مرحله ۱ را حفظ کنید." >&2
+    exit 1
+  fi
   if [ "${#DECREASED[@]}" -gt 0 ]; then
     echo "  ✘ هشدار جدی — این شمارنده‌ها کاهش یافته‌اند:" >&2
     for d in "${DECREASED[@]}"; do echo "     - $d" >&2; done
@@ -90,7 +93,6 @@ echo "── ۶) دروازه نهایی: مهاجرت موفق + سلامت ه�
 if daniar_gate_success 300; then
   echo "── وضعیت ──"
   docker compose ps
-  docker image prune -f >/dev/null 2>&1 || true
   echo "✔ به‌روزرسانی کامل شد — داده‌ها روی ولوم daniar_data حفظ شده‌اند."
   echo "  پشتیبان‌ها: ./backups (میزبان) و /data/backups (داخل ولوم — ۷ نسخه آخر پیش از هر مهاجرت)"
 else

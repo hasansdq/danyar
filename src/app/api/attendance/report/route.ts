@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { jsonError, requireSchoolAdmin } from '@/lib/api-auth'
+import { jsonError, requireSchoolManager } from '@/lib/api-auth'
 import { attendanceEnabled } from '@/lib/attendance-access'
 import { buildAttendanceReport } from '@/lib/attendance-report'
 import { isValidDateKey } from '@/lib/jalali'
@@ -11,7 +11,7 @@ import { isValidDateKey } from '@/lib/jalali'
  * جلسات پیش‌نویس در گزارش و آمار محاسبه نمی‌شوند.
  */
 export async function GET(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('attendance')
   if ('response' in res) return res.response
   const session = res.session
 

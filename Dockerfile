@@ -73,6 +73,17 @@ COPY --from=builder /app/prisma ./prisma
 RUN node node_modules/prisma/build/index.js --version \
     && node -e "require('@prisma/client'); require('sharp')"
 
+# Check the entire migration chain against the schema on an isolated empty database.
+# Missing migration files must fail the image build before reaching a VPS.
+RUN set -eu; \
+    for migration in prisma/migrations/*/migration.sql; do \
+      sqlite3 -bail /tmp/daniar-schema-check.db < "$migration"; \
+    done; \
+    node node_modules/prisma/build/index.js migrate diff \
+      --from-url file:/tmp/daniar-schema-check.db \
+      --to-schema-datamodel prisma/schema.prisma --exit-code; \
+    rm -f /tmp/daniar-schema-check.db
+
 # سرویس Socket.IO مستقل
 COPY --from=builder /app/socket-server.mjs ./socket-server.mjs
 

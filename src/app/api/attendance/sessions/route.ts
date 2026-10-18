@@ -66,7 +66,10 @@ export async function GET(req: NextRequest) {
         status: s.status,
         classroomId: s.classroom.id,
         classroomName: s.classroom.name,
+        creatorId: s.creator.id,
         creatorName: s.creator.fullName,
+        // جلسهٔ خودِ کاربر؟ (درخواست کاربر — معلم فقط جلسهٔ خودش را ویرایش می‌کند)
+        isMine: s.creator.id === session.uid,
         finalizedAt: s.finalizedAt,
         counts: { present, absent, recorded: s.records.length },
       }
@@ -131,20 +134,27 @@ export async function POST(req: NextRequest) {
 
   // عنوان پیش‌فرض: «جلسه N» بر اساس تعداد جلسات قبلی همین کلاس
   const existingCount = await db.attendanceSession.count({ where: { classroomId: b.classroomId } })
-  const finalTitle = title || `جلسه ${existingCount + 1}`
+  let finalTitle = title || `جلسه ${existingCount + 1}`
 
-  const dup = await db.attendanceSession.findUnique({
-    where: {
-      classroomId_dateKey_title: {
-        classroomId: b.classroomId,
-        dateKey: b.dateKey!,
-        title: finalTitle,
+  // حل تعارض عنوان (درخواست کاربر — جلسهٔ خودکار هر معلم):
+  // چند جلسهٔ هم‌روز ممکن است عنوان پیش‌فرض یکسان بگیرند؛ تا یافتن عنوان یکتای بعدی جلو می‌رویم
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const dup = await db.attendanceSession.findUnique({
+      where: {
+        classroomId_dateKey_title: {
+          classroomId: b.classroomId,
+          dateKey: b.dateKey!,
+          title: finalTitle,
+        },
       },
-    },
-    select: { id: true },
-  })
-  if (dup) {
-    return jsonError('برای این کلاس در این روز جلسه‌ای با همین عنوان وجود دارد', 409)
+      select: { id: true },
+    })
+    if (!dup) break
+    if (title) {
+      // عنوان صریح ارسال شده و تکراری است — همان خطای قبلی برای کاربر
+      return jsonError('برای این کلاس در این روز جلسه‌ای با همین عنوان وجود دارد', 409)
+    }
+    finalTitle = `جلسه ${existingCount + 1 + attempt + 1}`
   }
 
   // دانش‌آموزان فعال ثبت‌نام‌شده — همه پیش‌فرض حاضر

@@ -1,0 +1,10 @@
+import { PrismaClient } from "@prisma/client";
+const db = new PrismaClient();
+const users = await db.user.findMany({ select: { username: true, role: true } });
+console.log("total users:", users.length);
+const sa = users.find(u => u.username === "superadmin");
+console.log("superadmin present:", !!sa, sa?.role ?? "-");
+console.log("all:", users.map(u => `${u.username}(${u.role})`).join(", "));
+const schools = await db.school.findMany({ select: { id: true, name: true } });
+console.log("schools:", schools.length);
+await db.$disconnect();

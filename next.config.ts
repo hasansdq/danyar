@@ -9,6 +9,22 @@ const nextConfig: NextConfig = {
   reactStrictMode: false,
   // نشانگر dev گوشه صفحه را نمی‌خواهیم (با دکمه‌های پایین تداخل دارد)
   devIndicators: false,
+  // ─── پیام‌رسان بلادرنگ: پراکسی داخلی /socket.io به سرویس مستقل :3003 ───
+  // دسترسی مستقیم به :3000 (بدون گیت‌وی :81) هم باید سوکت واقعی داشته باشد تا
+  // نشان «متصل» صفحه اول صادق بماند. در گیت‌وی/داکر، /socket.io قبل از Next
+  // به سرویس سوکت می‌رود و این پراکسی هرگز اجرا نمی‌شود (پشتیبان اضافی است).
+  // ارتقای websocket از مسیر rewrites پشتیبانی نمی‌شود — socket.io خودکار
+  // روی polling می‌ماند (ترتیب transports در socket-client.ts).
+  async rewrites() {
+    const socketTarget = process.env.SOCKET_PROXY_TARGET ?? "http://localhost:3003";
+    return [
+      // سه الگو لازم است: engine.io همیشه /socket.io/ (با اسلش) صدا می‌زند و
+      // Next مسیر بدون-اسلش را ۳۰۸ می‌کند؛ هر دو شکل + زیرمسیرها پوشش داده شوند
+      { source: "/socket.io", destination: `${socketTarget}/socket.io/` },
+      { source: "/socket.io/", destination: `${socketTarget}/socket.io/` },
+      { source: "/socket.io/:path*", destination: `${socketTarget}/socket.io/:path*` },
+    ];
+  },
   // امنیت کش: پاسخ API و صفحات خصوصی هرگز در کش عمومی ذخیره نمی‌شوند
   async headers() {
     return [

@@ -42,6 +42,11 @@ case "$MODE" in
       fi
     fi
 
+    # Create an empty SQLite file explicitly on first install; no existing file is replaced.
+    if [ ! -f "$DB_PATH" ]; then
+      sqlite3 "$DB_PATH" 'PRAGMA user_version;' >/dev/null
+    fi
+
     if [ -f "$DB_PATH" ]; then
       # دیتابیس موجود که با db push ساخته شده و جدول مهاجرت ندارد → وضعیت پایه
       TABLES=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
@@ -95,8 +100,14 @@ case "$MODE" in
         fi
       fi
     fi
-    echo "[daniar] اعمال مهاجرت‌های Prisma (deploy — هرگز داده حذف/تغییر نمی‌کند)…"
+    echo "[daniar] اعمال migrationهای نسخه با Prisma deploy (پس از پشتیبان‌گیری)…"
     $PRISMA migrate deploy
+
+    # هم‌خوان‌سازی قفل گروه‌ها (درخواست کاربر): دو روش قفل (پرچم lockedForStudents
+    # و سیاست messagePolicy) باید همیشه هم‌خوان باشند؛ این هم‌ترازی idempotent است
+    # و فقط ردیف‌های ناهم‌خوان قدیمی را اصلاح می‌کند (STAFF/ADMINS ⇒ قفل؛ ALL ⇒ باز)
+    echo "[daniar] هم‌خوان‌سازی قفل گروه‌ها (lockedForStudents ↔ messagePolicy)…"
+    sqlite3 "$DB_PATH" "UPDATE SubjectGroup SET lockedForStudents = 1 WHERE messagePolicy IN ('STAFF','ADMINS') AND lockedForStudents = 0; UPDATE SubjectGroup SET lockedForStudents = 0 WHERE messagePolicy = 'ALL' AND lockedForStudents = 1;" 2>/dev/null || true
 
     echo "[daniar] اطمینان از حساب مدیر کل (رمز فقط از تنظیمات مالک؛ حساب‌های موجود تغییر نمی‌کنند)…"
     node prisma/seed.mjs

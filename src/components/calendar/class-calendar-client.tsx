@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CalendarDays,
   ChevronLeft,
@@ -32,7 +32,7 @@ import {
   todayDateKey,
   weekdayOfDateKey,
 } from '@/lib/jalali'
-import { faNum } from '@/lib/format'
+import { faNum, faNumPlain } from '@/lib/format'
 import { DayEventsDialog, type CalendarEventDto } from '@/components/calendar/day-events-dialog'
 import { EVENT_TYPE_META, EVENT_TYPE_ORDER, eventDisplayLabel } from '@/components/calendar/event-meta'
 import type { ClassEventType } from '@/lib/calendar-events'
@@ -51,6 +51,9 @@ interface ClassCalendarClientProps {
   uid: string
   /** کلاس انتخابی از صفحه جزئیات کلاس (?class=…) */
   initialClassId?: string
+  /** توکن دیپ‌لینک «ثبت غیبت/نمره/تخلف امروز» (?open=attendance&t=…) —
+   *  هر توکن یک بار مصرف است: امروز انتخاب و ویرایشگر حضور و غیاب مستقیم باز می‌شود */
+  autoAttendance?: string
 }
 
 /**
@@ -62,9 +65,10 @@ interface ClassCalendarClientProps {
  * - معلم و مدیر: ثبت رویداد (تعطیل فقط مدیر؛ دامنه کلاس/کل مدرسه فقط مدیر)
  * - دانش‌آموز: فقط مشاهده
  */
-export function ClassCalendarClient({ role, uid, initialClassId }: ClassCalendarClientProps) {
-  const isAdmin = role === 'SCHOOL_ADMIN'
-  const canCreate = role === 'SCHOOL_ADMIN' || role === 'TEACHER'
+export function ClassCalendarClient({ role, uid, initialClassId, autoAttendance }: ClassCalendarClientProps) {
+  // معاون همهٔ دسترسی‌های مدیر مدرسه را دارد (درخواست کاربر) — محدودیت‌ها سمت API اعمال می‌شود
+  const isAdmin = role === 'SCHOOL_ADMIN' || role === 'SCHOOL_VICE'
+  const canCreate = role === 'SCHOOL_ADMIN' || role === 'SCHOOL_VICE' || role === 'TEACHER'
 
   const [classes, setClasses] = useState<CalendarClassItem[] | null>(null)
   const [classId, setClassId] = useState<string | null>(null)
@@ -77,6 +81,12 @@ export function ClassCalendarClient({ role, uid, initialClassId }: ClassCalendar
   const todayJ = useMemo(() => parseDateKey(todayDateKey())!, [])
   const [gridMonth, setGridMonth] = useState({ jy: todayJ.jy, jm: todayJ.jm })
   const [listMonth, setListMonth] = useState({ jy: todayJ.jy, jm: todayJ.jm })
+
+  // توکن فعال دیپ‌لینک (FAB معلم) — با تغییر prop به‌روز می‌شود
+  const [attToken, setAttToken] = useState<string | undefined>(autoAttendance)
+  useEffect(() => {
+    if (autoAttendance) setAttToken(autoAttendance)
+  }, [autoAttendance])
 
   /* ───── بارگذاری کلاس‌های قابل دسترس ───── */
   useEffect(() => {
@@ -100,6 +110,19 @@ export function ClassCalendarClient({ role, uid, initialClassId }: ClassCalendar
       alive = false
     }
   }, [initialClassId])
+
+  /* ───── دیپ‌لینک «ثبت غیبت/نمره/تخلف امروز» (دکمه شناور «+» معلم) ─────
+     پس از رسیدن کلاس‌ها: ماه‌ها به امروز برمی‌گردند و امروز انتخاب می‌شود؛
+     هر توکن فقط یک بار مصرف است (FAB هر بار توکن تازه می‌فرستد). */
+  const attTokenFiredFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!attToken || !classes || classes.length === 0) return
+    if (attTokenFiredFor.current === attToken) return
+    attTokenFiredFor.current = attToken
+    setGridMonth({ jy: todayJ.jy, jm: todayJ.jm })
+    setListMonth({ jy: todayJ.jy, jm: todayJ.jm })
+    setSelectedDay(todayDateKey())
+  }, [attToken, classes, todayJ])
 
   /* ───── بارگذاری رویدادها (پوشش هر دو نما) ───── */
   const fetchEvents = useCallback(async () => {
@@ -275,27 +298,11 @@ export function ClassCalendarClient({ role, uid, initialClassId }: ClassCalendar
         </div>
       </div>
 
-      {/* راهنمای انواع رویداد (آیکون و رنگ سفارشی هر رویداد) */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5" aria-label="راهنمای انواع رویداد">
-        {EVENT_TYPE_ORDER.map((t) => {
-          const meta = EVENT_TYPE_META[t]
-          const Icon = meta.icon
-          return (
-            <span key={t} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground" title={meta.hint}>
-              <span className={cn('flex h-5 w-5 items-center justify-center rounded-full', meta.chipClass)}>
-                <Icon className="h-3 w-3" />
-              </span>
-              {meta.label}
-            </span>
-          )
-        })}
-      </div>
-
       {/* ───── نمای شبکه‌ای ───── */}
       {view === 'grid' && (
         <div className="rounded-xl border bg-card p-3 sm:p-4" dir="rtl">
           <MonthNav
-            title={`${JALALI_MONTHS[gridMonth.jm - 1]} ${faNum(gridMonth.jy)}`}
+            title={`${JALALI_MONTHS[gridMonth.jm - 1]} ${faNumPlain(gridMonth.jy)}`}
             onPrev={() => setGridMonth((m) => moveMonth(m, -1))}
             onNext={() => setGridMonth((m) => moveMonth(m, 1))}
           />
@@ -343,7 +350,8 @@ export function ClassCalendarClient({ role, uid, initialClassId }: ClassCalendar
                     !isSelected && isToday && 'ring-2 ring-primary font-bold',
                   )}
                 >
-                  <span>{faNum(day)}</span>
+                  {/* عدد روز — در دسکتاپ کمی بزرگ‌تر تا در کادر مربعی روز کوچک به نظر نرسد */}
+                  <span className="text-[13px] font-medium sm:text-lg sm:leading-7">{faNum(day)}</span>
                   {hasEvents && (
                     <span className="absolute bottom-1 flex gap-0.5" dir="ltr">
                       {types.slice(0, 4).map((t) => (
@@ -372,7 +380,7 @@ export function ClassCalendarClient({ role, uid, initialClassId }: ClassCalendar
       {view === 'list' && (
         <div className="rounded-xl border bg-card p-3 sm:p-4" dir="rtl">
           <MonthNav
-            title={`${JALALI_MONTHS[listMonth.jm - 1]} ${faNum(listMonth.jy)}`}
+            title={`${JALALI_MONTHS[listMonth.jm - 1]} ${faNumPlain(listMonth.jy)}`}
             hint={isCurrentListMonth ? 'از امروز' : undefined}
             onPrev={() => setListMonth((m) => moveMonth(m, -1))}
             onNext={() => setListMonth((m) => moveMonth(m, 1))}
@@ -456,6 +464,23 @@ export function ClassCalendarClient({ role, uid, initialClassId }: ClassCalendar
         </div>
       )}
 
+      {/* راهنمای انواع رویداد (آیکون و رنگ سفارشی هر رویداد) — طبق درخواست کاربر
+          از بالای باکس تقویم به پایین آن منتقل شد */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5" aria-label="راهنمای انواع رویداد">
+        {EVENT_TYPE_ORDER.map((t) => {
+          const meta = EVENT_TYPE_META[t]
+          const Icon = meta.icon
+          return (
+            <span key={t} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground" title={meta.hint}>
+              <span className={cn('flex h-5 w-5 items-center justify-center rounded-full', meta.chipClass)}>
+                <Icon className="h-3 w-3" />
+              </span>
+              {meta.label}
+            </span>
+          )
+        })}
+      </div>
+
       {/* دیالوگ روز — مشاهده برای همه، ثبت برای معلم و مدیر */}
       <DayEventsDialog
         open={selectedDay !== null}
@@ -469,6 +494,7 @@ export function ClassCalendarClient({ role, uid, initialClassId }: ClassCalendar
         classId={classId ?? ''}
         className={currentClassName}
         onChanged={fetchEvents}
+        autoOpenAttendance={attToken}
       />
     </div>
   )
@@ -483,10 +509,10 @@ function CalendarHeader({ isAdmin }: { isAdmin: boolean }) {
         <CalendarDays className="h-6 w-6 text-primary" />
         تقویم آموزشی
       </h1>
-      <p className="text-sm text-muted-foreground">
-        تقویم جلالی کلاس — رویدادهای حال و آینده
-        {isAdmin ? ' (ثبت برای کل مدرسه یا کلاس انتخابی)' : ''}
-      </p>
+      {/* متن «تقویم جلالی کلاس — رویدادهای حال و آینده» حذف شد (درخواست کاربر) — فقط راهنمای ثبت مدیر می‌ماند */}
+      {isAdmin && (
+        <p className="text-sm text-muted-foreground">ثبت برای کل مدرسه یا کلاس انتخابی</p>
+      )}
     </div>
   )
 }

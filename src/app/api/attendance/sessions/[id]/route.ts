@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { jsonError, requireAppRole } from '@/lib/api-auth'
-import { attendanceEnabled, canManageAttendanceSession, ATTENDANCE_STATUSES } from '@/lib/attendance-access'
+import {
+  attendanceEnabled,
+  canManageAttendanceSession,
+  ATTENDANCE_STATUSES,
+  GRADE_TITLE_REQUIRED_MSG,
+  GRADE_LESSON_REQUIRED_MSG,
+} from '@/lib/attendance-access'
 import { formatJalaliDate } from '@/lib/jalali'
 import { pushNotifications } from '@/lib/notifications'
+import { toPersianDigits } from '@/lib/school'
 
 /**
  * GET /api/attendance/sessions/[id] — جزئیات کامل جلسه برای مدیران آن
@@ -34,7 +41,12 @@ export async function GET(
   const canManage = await canManageAttendanceSession(session, att, att.classroom.schoolId)
   if (!canManage) return jsonError('جلسه یافت نشد', 404)
 
-  const [records, edits] = await Promise.all([
+  // مالکیت جلسه (درخواست کاربر): معلم فقط جلسهٔ خودش را ویرایش می‌کند —
+  // جلسهٔ معلم دیگر فقط قابل مشاهده است؛ جلسهٔ خودش را از دیالوگ روز می‌سازد
+  const canManageRecords =
+    session.role !== 'TEACHER' || att.creatorId === session.uid
+
+  const [records, edits, violations, grades] = await Promise.all([
     db.attendanceRecord.findMany({
       where: { sessionId: id },
       include: { student: { select: { id: true, fullName: true } } },
@@ -44,6 +56,30 @@ export async function GET(
       where: { sessionId: id },
       include: { editor: { select: { id: true, fullName: true } } },
       orderBy: { createdAt: 'desc' },
+    }),
+    // تخلفات این جلسه + تخلفات همان کلاس/روز بدون جلسهٔ مشخص
+    db.studentViolation.findMany({
+      where: {
+        OR: [
+          { sessionId: id },
+          { classroomId: att.classroomId, dateKey: att.dateKey, sessionId: null },
+        ],
+      },
+      include: {
+        student: { select: { id: true, fullName: true } },
+        creator: { select: { id: true, fullName: true } },
+      },
+      orderBy: [{ createdAt: 'desc' }],
+    }),
+    // نمرات ثبت‌شدهٔ همین جلسه (درخواست کاربر — ستون «نمره» معلم)
+    db.studentGrade.findMany({
+      where: { sessionId: id },
+      include: {
+        student: { select: { id: true, fullName: true } },
+        lesson: { select: { id: true, name: true } },
+        creator: { select: { id: true, fullName: true } },
+      },
+      orderBy: [{ updatedAt: 'desc' }],
     }),
   ])
 
@@ -85,11 +121,39 @@ export async function GET(
       status: att.status,
       classroomId: att.classroom.id,
       classroomName: att.classroom.name,
+      creatorId: att.creatorId,
       creatorName: att.creator.fullName,
+      // معلم: فقط جلسهٔ خودش قابل ویرایش است (درخواست کاربر)
+      canManageRecords,
       finalizedAt: att.finalizedAt,
       createdAt: att.createdAt,
     },
     students,
+    violations: violations.map((v) => ({
+      id: v.id,
+      studentId: v.studentId,
+      studentName: v.student.fullName,
+      dateKey: v.dateKey,
+      text: v.text,
+      creatorId: v.creatorId,
+      creatorName: v.creator.fullName,
+      createdAt: v.createdAt,
+    })),
+    // نمرات جلسه — برای پیش‌پر کردن ستون «نمره» و فیلدهای عنوان/درس در ویرایشگر
+    grades: grades.map((g) => ({
+      id: g.id,
+      studentId: g.studentId,
+      studentName: g.student.fullName,
+      title: g.title,
+      lessonId: g.lessonId,
+      lessonName: g.lesson?.name ?? null,
+      score: g.score,
+      dateKey: g.dateKey,
+      creatorId: g.creatorId,
+      creatorName: g.creator.fullName,
+      createdAt: g.createdAt,
+      updatedAt: g.updatedAt,
+    })),
     edits: edits.map((e) => ({
       id: e.id,
       studentId: e.studentId,
@@ -108,6 +172,19 @@ interface PatchRecord {
   studentId: string
   status: string
   note?: string | null
+}
+
+interface PatchGrade {
+  studentId: string
+  score?: string | null
+}
+
+/**
+ * نرمال‌سازی نمره — ارقام فارسی، حذف فاصله‌های اضافی، سقف طول
+ */
+function normalizeScore(raw: unknown): string {
+  const score = toPersianDigits(String(raw ?? '').trim().replace(/\s+/g, ' '))
+  return score.slice(0, 20)
 }
 
 /**
@@ -140,6 +217,9 @@ export async function PATCH(
   const b = body as {
     records?: PatchRecord[]
     action?: string
+    grades?: PatchGrade[]
+    gradeTitle?: string | null
+    gradeLessonId?: string | null
   }
 
   const att = await db.attendanceSession.findUnique({
@@ -153,6 +233,15 @@ export async function PATCH(
 
   const canManage = await canManageAttendanceSession(session, att, att.classroom.schoolId)
   if (!canManage) return jsonError('جلسه یافت نشد', 404)
+
+  // مالکیت جلسه (درخواست کاربر): معلمِ متفاوت حق اصلاح فرم حضور و غیاب/نمرهٔ جلسهٔ
+  // معلم دیگر را ندارد — جلسهٔ جدید خودش از دیالوگ روز ساخته می‌شود
+  if (session.role === 'TEACHER' && att.creatorId !== session.uid) {
+    return jsonError(
+      `این جلسه توسط «${att.creator.fullName}» ایجاد شده است — برای ثبت، جلسهٔ خودتان را از تقویم بسازید`,
+      403,
+    )
+  }
 
   // اعتبارسنجی ورودی پیش از هر تغییری
   const recInputs = Array.isArray(b.records) ? b.records : []
@@ -175,6 +264,55 @@ export async function PATCH(
     return jsonError('این جلسه قبلاً نهایی شده است', 400)
   }
 
+  // ─── اعتبارسنجی نمرات (درخواست کاربر — ستون «نمره» معلم) ───
+  // نمره‌دهی فقط برای نقش معلم؛ مدیر/معاون ستون نمره ندارند
+  const gradeInputs = Array.isArray(b.grades) ? b.grades : []
+  const hasGradePayload = Array.isArray(b.grades)
+  if (hasGradePayload && gradeInputs.length > 0 && session.role !== 'TEACHER') {
+    return jsonError('ثبت نمره فقط برای نقش معلم امکان‌پذیر است', 403)
+  }
+  const gradeTitle = String(b.gradeTitle ?? '').trim()
+  const gradeLessonRaw = b.gradeLessonId == null ? '' : String(b.gradeLessonId).trim()
+  // نمره‌های واقعی (نمرهٔ خالی = ثبت‌نشده)
+  const gradeDrafts: { studentId: string; score: string }[] = []
+  const seenGradeIds = new Set<string>()
+  for (const g of gradeInputs) {
+    if (!g || typeof g.studentId !== 'string' || !g.studentId) {
+      return jsonError('رکورد نمره نامعتبر است', 400)
+    }
+    if (seenGradeIds.has(g.studentId)) return jsonError('نمرهٔ تکراری ارسال شده است', 400)
+    seenGradeIds.add(g.studentId)
+    const score = normalizeScore(g.score)
+    if (score) gradeDrafts.push({ studentId: g.studentId, score })
+  }
+
+  // درس انتخابی باید از درس‌های منتسب به همین معلم باشد
+  let gradeLessonId: string | null = null
+  if (gradeLessonRaw) {
+    if (session.role !== 'TEACHER') {
+      return jsonError('انتخاب درس فقط برای نقش معلم امکان‌پذیر است', 403)
+    }
+    const assigned = await db.teacherLesson.findFirst({
+      where: { teacherId: session.uid, lessonId: gradeLessonRaw },
+      select: { id: true },
+    })
+    if (!assigned) return jsonError('درس انتخابی به شما منتسب نشده است', 400)
+    gradeLessonId = gradeLessonRaw
+  }
+
+  // عنوان نمره با ثبت حداقل یک نمره اجباری می‌شود (درخواست کاربر — عین پیام)
+  if (gradeDrafts.length > 0 && gradeTitle.length < 2) {
+    return jsonError(GRADE_TITLE_REQUIRED_MSG, 400)
+  }
+  if (gradeTitle.length > 120) {
+    return jsonError('عنوان نمره حداکثر ۱۲۰ کاراکتر است', 400)
+  }
+
+  // انتخاب «درس» اجباری است (درخواست کاربر) — با ثبت حداقل یک نمره، درس باید انتخاب شود
+  if (gradeDrafts.length > 0 && !gradeLessonId) {
+    return jsonError(GRADE_LESSON_REQUIRED_MSG, 400)
+  }
+
   const enrolled = await db.classroomEnrollment.findMany({
     where: { classroomId: att.classroomId },
     select: { studentId: true },
@@ -190,6 +328,23 @@ export async function PATCH(
     // دانش‌آموز باید ثبت‌نام کلاس باشد یا قبلاً رکورد داشته باشد (حفظ سابقه خروجی‌ها)
     if (!enrolledSet.has(r.studentId) && !recMap.has(r.studentId)) {
       return jsonError('این دانش‌آموز عضو این کلاس نیست', 400)
+    }
+  }
+
+  // دانش‌آموزانِ نمره نیز باید عضو کلاس باشند (یا نمرهٔ قبلی داشته باشند)
+  if (gradeDrafts.length > 0) {
+    const existingGradeStudents = new Set(
+      (
+        await db.studentGrade.findMany({
+          where: { sessionId: id },
+          select: { studentId: true },
+        })
+      ).map((g) => g.studentId),
+    )
+    for (const g of gradeDrafts) {
+      if (!enrolledSet.has(g.studentId) && !recMap.has(g.studentId) && !existingGradeStudents.has(g.studentId)) {
+        return jsonError('این دانش‌آموز عضو این کلاس نیست', 400)
+      }
     }
   }
 
@@ -214,12 +369,14 @@ export async function PATCH(
   await db.$transaction(async (tx) => {
     for (const r of recInputs) {
       const prev = recMap.get(r.studentId)
-      const newNote = r.note?.toString().trim() || null
+      // «یادداشت غیبت» حذف شد (درخواست کاربر) — یادداشت‌های قبلی دست‌نخورده می‌مانند
+      // و مقایسه تغییر فقط روی وضعیت حضور انجام می‌شود
+      const newNote = prev?.note ?? null
       if (prev) {
-        if (prev.status === r.status && (prev.note ?? null) === newNote) continue // بدون تغییر واقعی
+        if (prev.status === r.status) continue // بدون تغییر واقعی
         await tx.attendanceRecord.update({
           where: { sessionId_studentId: { sessionId: id, studentId: r.studentId } },
-          data: { status: r.status, note: newNote, updatedAt: now },
+          data: { status: r.status, updatedAt: now },
         })
         await tx.attendanceEditLog.create({
           data: {
@@ -245,9 +402,9 @@ export async function PATCH(
           })
         }
       } else {
-        // رکورد جدید برای ثبت‌نشده
+        // رکورد جدید برای ثبت‌نشده — بدون یادداشت (فیلد حذف شده)
         await tx.attendanceRecord.create({
-          data: { sessionId: id, studentId: r.studentId, status: r.status, note: newNote },
+          data: { sessionId: id, studentId: r.studentId, status: r.status },
         })
         await tx.attendanceEditLog.create({
           data: {
@@ -256,7 +413,7 @@ export async function PATCH(
             oldStatus: 'UNSET',
             newStatus: r.status,
             oldNote: null,
-            newNote,
+            newNote: null,
             editorId: session.uid,
           },
         })
@@ -279,6 +436,34 @@ export async function PATCH(
         where: { id },
         data: { status: 'FINALIZED', finalizedAt: now },
       })
+    }
+
+    // ─── ذخیرهٔ نمرات (درخواست کاربر) — جایگزینی مجموعهٔ نمرات همین درس در همین جلسه ───
+    // نمره‌های درس‌های دیگر همین جلسه دست‌نخورده می‌مانند؛
+    // حذف نمره (خالی‌کردن فیلد) هم با همین جایگزینی انجام می‌شود.
+    if (hasGradePayload) {
+      await tx.studentGrade.deleteMany({
+        where: {
+          sessionId: id,
+          ...(gradeLessonId
+            ? { lessonId: gradeLessonId }
+            : { lessonId: null }),
+        },
+      })
+      if (gradeDrafts.length > 0) {
+        await tx.studentGrade.createMany({
+          data: gradeDrafts.map((g) => ({
+            studentId: g.studentId,
+            classroomId: att.classroomId,
+            dateKey: att.dateKey,
+            sessionId: id,
+            title: gradeTitle,
+            ...(gradeLessonId ? { lessonId: gradeLessonId } : {}),
+            score: g.score,
+            creatorId: session.uid,
+          })),
+        })
+      }
     }
   })
 

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { Bell } from 'lucide-react'
 import { getSocket } from '@/components/messenger/socket-client'
 import { useToast } from '@/hooks/use-toast'
+import { apiFetch } from '@/lib/client-api'
 import { cn } from '@/lib/utils'
 
 /**
@@ -22,7 +23,9 @@ export function NotificationBell() {
 
     const refresh = async () => {
       try {
-        const r = await fetch('/api/notifications?count=1', { cache: 'no-store' })
+        // apiFetch: 401 (نشست زامبی/باطل) → هداشت خودکار به ورود — تور ایمنی سراسری
+        // چون این زنگ روی همهٔ صفحات احراز‌هویت‌شده حضور دارد
+        const r = await apiFetch('/api/notifications?count=1', { cache: 'no-store' })
         if (!r.ok) return
         const d = await r.json()
         if (alive) setUnread(d.unreadCount ?? 0)

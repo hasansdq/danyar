@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { requireAuth, jsonError } from '@/lib/api-auth'
 import { parseFeatures } from '@/lib/features'
 import { getImpersonation } from '@/lib/session'
+import { vicePermissionMap } from '@/lib/vice-permissions'
 
 export async function GET() {
   const res = await requireAuth()
@@ -34,12 +35,19 @@ export async function GET() {
       })
     : null
 
+  // نقشهٔ مجوزهای معاون (سوییچ‌های مدیر مدرسه) — فقط برای نقش معاون؛
+  // منوی اصلی و دکمه‌ها بر اساس همین منبع حقیقت نمایش داده می‌شوند
+  const vicePermissions = user.role === 'SCHOOL_VICE' ? await vicePermissionMap(user.id) : null
+
   return NextResponse.json({
     user: {
       ...user,
       avatarUrl: user.avatarKey ? '/api/me/avatar' : null,
     },
     features: parseFeatures(user.school?.features),
+    vicePermissions,
+    // ورود با رمز پیش‌فرض — برای نمایش هشدار تغییر رمز اجباری در رابط کاربری
+    pwdDefault: res.session.pwdDefault ?? false,
     impersonation: imp
       ? { byName: impersonator?.fullName ?? 'مدیر کل' }
       : null,

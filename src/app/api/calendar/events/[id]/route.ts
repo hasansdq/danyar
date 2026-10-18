@@ -27,7 +27,8 @@ export async function DELETE(
     return jsonError('دانش‌آموز اجازه حذف رویداد ندارد', 403)
   }
 
-  if (session.role === 'SCHOOL_ADMIN') {
+  if (session.role === 'SCHOOL_ADMIN' || session.role === 'SCHOOL_VICE') {
+    // معاون همهٔ دسترسی‌های مدیر را دارد؛ محدودیت «ثبت رویداد» سمت POST اعمال می‌شود
     if (session.schoolId !== event.schoolId) {
       return jsonError('به این رویداد دسترسی ندارید', 403)
     }

@@ -47,3 +47,8 @@ export function chatTime(iso: string | Date): string {
 export function faNum(n: number | string): string {
   return new Intl.NumberFormat('fa-IR').format(Number(n))
 }
+
+/** اعداد فارسی بدون جداکنندهٔ سه‌رقمی — برای سال و اعداد شناسه‌ای (مثل ۱۴۰۵) */
+export function faNumPlain(n: number | string): string {
+  return new Intl.NumberFormat('fa-IR', { useGrouping: false }).format(Number(n))
+}

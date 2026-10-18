@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { apiFetch } from '@/lib/client-api'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
@@ -217,9 +218,11 @@ function GalleryTab() {
       sp.set('order', f.order)
       sp.set('page', String(p))
       sp.set('pageSize', '20')
-      const r = await fetch(`/api/admin/media?${sp.toString()}`)
+      const r = await apiFetch(`/api/admin/media?${sp.toString()}`)
       if (!r.ok) {
-        toast.error('خطا در دریافت فهرست رسانه‌ها')
+        // پیام دقیق سرور (مثل «نشست شما معتبر نیست») در صورت وجود نمایش داده می‌شود
+        const d = await r.json().catch(() => null)
+        toast.error(d?.error ?? 'خطا در دریافت فهرست رسانه‌ها')
         return
       }
       setData(await r.json())

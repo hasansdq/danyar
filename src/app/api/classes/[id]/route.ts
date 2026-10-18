@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin, jsonError } from '@/lib/api-auth'
+import { requireSchoolManager, jsonError } from '@/lib/api-auth'
 import { GRADE_OPTIONS } from '@/lib/school'
 
 type Params = { params: Promise<{ id: string }> }
@@ -12,7 +12,7 @@ async function getOwnedClassroom(classroomId: string, schoolId: string) {
 }
 
 export async function GET(_req: NextRequest, { params }: Params) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('classes')
   if ('response' in res) return res.response
   const { id } = await params
 
@@ -57,7 +57,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
 }
 
 export async function PATCH(req: NextRequest, { params }: Params) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('classes')
   if ('response' in res) return res.response
   const { id } = await params
 
@@ -102,7 +102,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 }
 
 export async function DELETE(_req: NextRequest, { params }: Params) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('classes')
   if ('response' in res) return res.response
   const { id } = await params
 

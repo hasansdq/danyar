@@ -76,6 +76,7 @@ import {
 import { toast } from '@/hooks/use-toast'
 import { faNum } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { ModirSectionSubNav } from '@/components/modir/section-subnav'
 import { SUBJECT_OPTIONS, composeGroupName, toPersianDigits } from '@/lib/school'
 
 interface ClassOption {
@@ -103,10 +104,18 @@ interface GroupRow {
   grade: string | null
   archivedAt: string | null
   lockedForStudents: boolean
+  /** سیاست ارسال پیام — ALL | STAFF | ADMINS (هم‌خوان با قفل) */
+  messagePolicy: string
   classroomId?: string | null
   classroomName?: string | null
   messageCount: number
   extraCount: number
+}
+
+/** وضعیت قفل واحد (درخواست کاربر): پرچم lockedForStudents یا سیاست STAFF/ADMINS —
+ *  هم‌خوان با هدر گروه در پیام‌رسان؛ قفل از هر روش در هر دو قسمت دیده می‌شود */
+function isGroupLocked(g: Pick<GroupRow, 'lockedForStudents' | 'messagePolicy'>): boolean {
+  return g.lockedForStudents || g.messagePolicy === 'STAFF' || g.messagePolicy === 'ADMINS'
 }
 
 const SCOPE_META: Record<string, { label: string; icon: React.ComponentType<{ className?: string }> }> = {
@@ -255,7 +264,7 @@ function TeacherMultiSelect({
   )
 }
 
-export function SchoolGroupsClient() {
+export function SchoolGroupsClient({ addOnly = false }: { addOnly?: boolean }) {
   const router = useRouter()
   // فهرست همه گروه‌ها (درسی + مدرسه‌ای) ادغام‌شده
   const [groups, setGroups] = useState<GroupRow[] | null>(null)
@@ -264,8 +273,8 @@ export function SchoolGroupsClient() {
   const [query, setQuery] = useState('')
   const [scopeFilter, setScopeFilter] = useState('all')
 
-  // روش ایجاد: 'auto' | 'custom' | null (بسته)
-  const [method, setMethod] = useState<'auto' | 'custom' | null>(null)
+  // روش ایجاد: 'auto' | 'custom' | null (بسته) — در حالت «فقط افزودن» از ابتدا روش خودکار باز است
+  const [method, setMethod] = useState<'auto' | 'custom' | null>(addOnly ? 'auto' : null)
   // تب‌های روش خودکار: درسی | همکاران | کلاسی | عمومی
   const [autoTab, setAutoTab] = useState('course')
 
@@ -313,6 +322,7 @@ export function SchoolGroupsClient() {
             name: string
             archivedAt: string | null
             lockedForStudents: boolean
+            messagePolicy: string
             classroomId: string
             classroom: { id: string; name: string }
             _count: { assignments: number; memberOverrides: number; messages: number }
@@ -323,6 +333,7 @@ export function SchoolGroupsClient() {
             grade: null,
             archivedAt: g.archivedAt,
             lockedForStudents: g.lockedForStudents,
+            messagePolicy: g.messagePolicy,
             classroomId: g.classroomId,
             classroomName: g.classroom?.name ?? null,
             messageCount: g._count.messages,
@@ -337,6 +348,7 @@ export function SchoolGroupsClient() {
             grade: string | null
             archivedAt: string | null
             lockedForStudents: boolean
+            messagePolicy: string
             _count: { messages: number; memberOverrides: number }
           }) => ({
             id: g.id,
@@ -345,6 +357,7 @@ export function SchoolGroupsClient() {
             grade: g.grade,
             archivedAt: g.archivedAt,
             lockedForStudents: g.lockedForStudents,
+            messagePolicy: g.messagePolicy,
             classroomId: null,
             classroomName: null,
             messageCount: g._count.messages,
@@ -388,9 +401,10 @@ export function SchoolGroupsClient() {
   }, [customUsers])
 
   useEffect(() => {
-    loadGroups()
+    // فهرست گروه‌ها فقط در صفحهٔ اصلی لازم است؛ در حالت «فقط افزودن» فقط پایه (کلاس/معلم) بار می‌شود
     loadBase()
-  }, [loadGroups, loadBase])
+    if (!addOnly) loadGroups()
+  }, [loadGroups, loadBase, addOnly])
 
   // باز شدن روش سفارشی → بارگذاری کاربران (یک‌بار)
   useEffect(() => {
@@ -563,15 +577,18 @@ export function SchoolGroupsClient() {
     }
   }
 
-  /** قفل/برداشتن قفل گروه برای دانش‌آموزان — گروه مخفی/حذف نمی‌شود؛ فقط ارسال دانش‌آموز بسته می‌شود */
+  /** قفل/برداشتن قفل گروه برای دانش‌آموزان — گروه مخفی/حذف نمی‌شود؛ فقط ارسال دانش‌آموز بسته می‌شود.
+   *  سرور سیاست ارسال (messagePolicy) را هم‌زمان هم‌خوان می‌کند تا هدر گروه و
+   *  تنظیمات گروه در پیام‌رسان همین قفل را نشان دهند (درخواست کاربر) */
   async function confirmLock() {
     if (!lockTarget || locking) return
+    const wasLocked = isGroupLocked(lockTarget)
     setLocking(true)
     try {
       const res = await fetch(`/api/groups/${lockTarget.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lockedForStudents: !lockTarget.lockedForStudents }),
+        body: JSON.stringify({ lockedForStudents: !wasLocked }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -579,10 +596,10 @@ export function SchoolGroupsClient() {
         return
       }
       toast({
-        title: lockTarget.lockedForStudents
+        title: wasLocked
           ? `قفل گروه «${lockTarget.name}» برداشته شد`
           : `گروه «${lockTarget.name}» برای دانش‌آموزان قفل شد`,
-        description: lockTarget.lockedForStudents
+        description: wasLocked
           ? 'دانش‌آموزان دوباره می‌توانند پیام و فایل بفرستند'
           : 'ارسال پیام و فایل دانش‌آموزان بسته شد؛ گروه مخفی نشد و مشاهده پیام‌ها آزاد است',
       })
@@ -634,11 +651,22 @@ export function SchoolGroupsClient() {
   return (
     <div className="max-w-3xl mx-auto px-3 py-5 sm:px-4 space-y-5">
       <div>
-        <h1 className="text-xl font-bold">مدیریت گروه‌ها</h1>
+        <h1 className="text-xl font-bold">{addOnly ? 'افزودن گروه جدید' : 'مدیریت گروه‌ها'}</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          ایجاد گروه با عضوگیری خودکار یا سفارشی، تغییر نام، بستن و حذف سریع همه گروه‌های مدرسه
+          {addOnly
+            ? 'ایجاد گروه با عضوگیری خودکار یا انتخاب دستی اعضا'
+            : 'ایجاد گروه با عضوگیری خودکار یا سفارشی، تغییر نام، بستن و حذف سریع همه گروه‌های مدرسه'}
         </p>
       </div>
+
+      {/* زیرناوبری دو صفحه‌ای گروه‌ها (فهرست / افزودن) */}
+      <ModirSectionSubNav
+        active={addOnly ? 'add' : 'list'}
+        listHref="/modir/groups"
+        addHref="/modir/groups/add"
+        listLabel="فهرست گروه‌ها"
+        addLabel="افزودن گروه"
+      />
 
       {/* دو روش ایجاد گروه — دو دکمه مجزا */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -965,7 +993,8 @@ export function SchoolGroupsClient() {
         </Card>
       )}
 
-      {/* ─── فهرست همه گروه‌ها با مدیریت سریع ─── */}
+      {/* ─── فهرست همه گروه‌ها با مدیریت سریع — فقط در صفحهٔ اصلی ─── */}
+      {!addOnly && (
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base">فهرست گروه‌ها</CardTitle>
@@ -1020,10 +1049,16 @@ export function SchoolGroupsClient() {
                       <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
                         {g.name}
                         {g.archivedAt && <Badge variant="secondary">بسته‌شده</Badge>}
-                        {g.lockedForStudents && (
+                        {/* وضعیت قفل واحد: پرچم مدیریت یا سیاست STAFF/ADMINS (هم‌خوان با هدر گروه) */}
+                        {isGroupLocked(g) && (
                           <Badge variant="secondary" className="gap-1 bg-amber-500/15 text-amber-700 dark:text-amber-400">
                             <Lock className="h-3 w-3" />
                             قفل برای دانش‌آموزان
+                          </Badge>
+                        )}
+                        {g.messagePolicy === 'ADMINS' && (
+                          <Badge variant="outline" className="gap-1 text-[10px]">
+                            ارسال: فقط مدیر مدرسه
                           </Badge>
                         )}
                       </div>
@@ -1061,11 +1096,11 @@ export function SchoolGroupsClient() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        aria-label={g.lockedForStudents ? `برداشتن قفل گروه ${g.name}` : `قفل گروه ${g.name}`}
-                        title={g.lockedForStudents ? 'برداشتن قفل گروه' : 'قفل گروه برای دانش‌آموزان'}
+                        aria-label={isGroupLocked(g) ? `برداشتن قفل گروه ${g.name}` : `قفل گروه ${g.name}`}
+                        title={isGroupLocked(g) ? 'برداشتن قفل گروه' : 'قفل گروه برای دانش‌آموزان'}
                         onClick={() => setLockTarget(g)}
                       >
-                        {g.lockedForStudents ? <LockOpen className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                        {isGroupLocked(g) ? <LockOpen className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
                       </Button>
                       <Button
                         variant="ghost"
@@ -1084,6 +1119,7 @@ export function SchoolGroupsClient() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* دیالوگ تغییر نام */}
       <Dialog open={renameTarget !== null} onOpenChange={(o) => !o && setRenameTarget(null)}>
@@ -1117,14 +1153,14 @@ export function SchoolGroupsClient() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {lockTarget?.lockedForStudents
+              {lockTarget && isGroupLocked(lockTarget)
                 ? `برداشتن قفل گروه «${lockTarget?.name}»؟`
                 : `قفل گروه «${lockTarget?.name}» برای دانش‌آموزان؟`}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {lockTarget?.lockedForStudents
+              {lockTarget && isGroupLocked(lockTarget)
                 ? 'با برداشتن قفل، دانش‌آموزان دوباره می‌توانند پیام و فایل بفرستند.'
-                : 'با قفل گروه، فقط ارسال پیام و فایل دانش‌آموزان بسته می‌شود؛ گروه مخفی یا حذف نمی‌شود، دانش‌آموزان پیام‌ها را همچنان می‌بینند و معلمان/مدیران عادی پیام می‌فرستند.'}
+                : 'با قفل گروه، فقط ارسال پیام و فایل دانش‌آموزان بسته می‌شود؛ گروه مخفی یا حذف نمی‌شود، دانش‌آموزان پیام‌ها را همچنان می‌بینند و معلمان/مدیران عادی پیام می‌فرستند. وضعیت قفل در هدر گروه پیام‌رسان هم به‌روز می‌شود.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

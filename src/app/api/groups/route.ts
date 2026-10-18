@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin, jsonError } from '@/lib/api-auth'
+import { requireSchoolManager, jsonError } from '@/lib/api-auth'
 
 /** فهرست همه گروه‌های درسی مدرسه (برای تب مجزای «گروه‌های درسی» پنل مدیر) */
 export async function GET() {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager()
   if ('response' in res) return res.response
 
   const groups = await db.subjectGroup.findMany({
@@ -15,6 +15,7 @@ export async function GET() {
       name: true,
       archivedAt: true,
       lockedForStudents: true,
+      messagePolicy: true,
       classroomId: true,
       classroom: { select: { id: true, name: true } },
       _count: { select: { assignments: true, memberOverrides: true, messages: true } },
@@ -26,7 +27,8 @@ export async function GET() {
 
 /** ایجاد گروه درسی برای یک کلاس — با عضوگیری خودکار دانش‌آموزان کلاس + انتساب معلمان */
 export async function POST(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  // معاون: مدیریت گروه‌ها فقط با مجوز مربوطه (سوییچ مدیر مدرسه)
+  const res = await requireSchoolManager('groups')
   if ('response' in res) return res.response
 
   const body = await req.json().catch(() => null)

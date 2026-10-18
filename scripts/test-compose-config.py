@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # اعتبارسنجی ساختاری docker-compose.yml — معادل بررسی‌های docker compose config در نبود docker
 import yaml, sys, re
+from pathlib import Path
 
 ok = True
 def check(cond, msg):
@@ -86,13 +87,21 @@ liveaccess = open('src/lib/live-access.ts').read()
 check('?? 32' in liveaccess, 'کد Next.js پیش‌فرض ۳۲')
 sockts = open('mini-services/socket-server/index.ts').read()
 check('?? 32' in sockts, 'سرویس Socket پیش‌فرض ۳۲')
-sockmjs = open('socket-server.mjs').read()
-check('?? 32' in sockmjs, 'باندل کانتینر socket پیش‌فرض ۳۲')
+if Path('socket-server.mjs').exists():
+    sockmjs = Path('socket-server.mjs').read_text()
+    check('?? 32' in sockmjs, 'باندل محلی socket پیش‌فرض ۳۲')
+else:
+    print('  — باندل Socket در بسته سورس وجود ندارد؛ صحت اجرای باندل نیازمند build است')
+dockerfile = Path('Dockerfile').read_text()
+check('bun build mini-services/socket-server/index.ts --target node' in dockerfile
+      and '--outfile socket-server.mjs' in dockerfile,
+      'Docker باندل Socket را از سورس می‌سازد')
 # ظرفیت اختصاصی کلاس — resolution در توکن و سوکت
 check('effectiveCapacity' in liveaccess, 'effectiveCapacity در کد Next.js')
 check('effectiveCapacity' in sockts, 'effectiveCapacity در سرویس Socket (Classroom.capacity)')
 tokenrt = open('src/app/api/live-sessions/[id]/token/route.ts').read()
-check('effectiveCapacity(live.classroom.capacity)' in tokenrt, 'توکن LiveKit با سقف مؤثر کلاس صادر می‌شود')
+check('effectiveCapacity(live.classroom.capacity,live.classroom.school?.liveMaxParticipants??null,)' in re.sub(r'\s+', '', tokenrt),
+      'توکن LiveKit با ظرفیت مؤثر کلاس و سقف مدرسه صادر می‌شود')
 
 print('── healthcheck همه سرویس‌های بلندمدت ──')
 for s in ['web', 'socket', 'proxy', 'livekit', 'coturn']:

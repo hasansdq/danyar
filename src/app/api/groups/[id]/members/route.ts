@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin, jsonError } from '@/lib/api-auth'
+import { requireSchoolManager, jsonError } from '@/lib/api-auth'
 import { notifySocket } from '@/lib/notify'
 
 type Params = { params: Promise<{ id: string }> }
@@ -14,7 +14,7 @@ async function getOwnedGroup(groupId: string, schoolId: string) {
 
 /** فهرست اعضای مؤثر گروه: دانش‌آموزان کلاس − حذف‌شده‌ها + افزوده‌شده‌ها */
 export async function GET(_req: NextRequest, { params }: Params) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('groups')
   if ('response' in res) return res.response
   const { id } = await params
 
@@ -81,7 +81,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
 
 /** ثبت استثناهای عضویت: افزوده‌ها و حذف‌شده‌ها */
 export async function PUT(req: NextRequest, { params }: Params) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('groups')
   if ('response' in res) return res.response
   const { id } = await params
 

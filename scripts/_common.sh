@@ -5,11 +5,22 @@
 # سرویس‌های فعال اعلام می‌شود — نه زودتر.
 # ─────────────────────────────────────────────────────────────
 
+# Read one scalar setting without executing .env as shell code.
+daniar_env_value() {
+  local value
+  value="$(grep -E "^${1}=" .env 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  value="${value%$'\r'}"
+  case "$value" in
+    \"*\"|\'*\') value="${value:1:${#value}-2}" ;;
+  esac
+  printf '%s' "$value"
+}
+
 # خدمات فعال پروژه (با پروفایل‌های .env) — خروجی: web socket proxy [livekit] [coturn]
 daniar_active_services() {
   local svcs="web socket proxy"
   local profiles
-  profiles="$(grep -E '^COMPOSE_PROFILES=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)"
+  profiles="${COMPOSE_PROFILES-$(daniar_env_value COMPOSE_PROFILES)}"
   case ",${profiles:-}," in
     *,media,*) svcs="$svcs livekit" ;;
   esac

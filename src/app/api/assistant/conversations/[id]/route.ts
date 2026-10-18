@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin } from '@/lib/api-auth'
+import { requireSchoolManager } from '@/lib/api-auth'
 
 /** مالکیت گفتگو — گفتگوی دیگری حتی با دانستن شناسه ۴۰۴ می‌شود */
 async function ownConversation(uid: string, id: number) {
@@ -13,7 +13,7 @@ async function ownConversation(uid: string, id: number) {
 
 /** پیام‌های گفتگو — فقط برای صاحبش */
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('ai_assistant')
   if ('response' in res) return res.response
   const { id } = await ctx.params
   const convId = Number(id)
@@ -43,7 +43,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 
 /** حذف گفتگو — دو مرحله‌ای: بدون confirm آمار می‌دهد؛ با confirm حذف قطعی */
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('ai_assistant')
   if ('response' in res) return res.response
   const { id } = await ctx.params
   const convId = Number(id)

@@ -27,6 +27,8 @@ import {
   Info,
   ListPlus,
   GraduationCap,
+  BookMarked,
+  Check,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -44,6 +46,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/hooks/use-toast'
 import { faNum, roleLabel } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { toPersianDigits } from '@/lib/school'
 import * as XLSX from 'xlsx'
 
@@ -304,20 +307,29 @@ function SchoolSelect({
   value,
   onChange,
   idPrefix,
+  allowNone = false,
+  optionalHint = false,
 }: {
   schools: SchoolOption[]
   value: string
   onChange: (v: string) => void
   idPrefix: string
+  /** گزینهٔ «بدون مدرسه» — برای مدیر مدرسه (اختیاری) */
+  allowNone?: boolean
+  /** نمایش برچسب «اختیاری» و توضیح زیر فیلد */
+  optionalHint?: boolean
 }) {
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={`${idPrefix}-school`}>مدرسه</Label>
+      <Label htmlFor={`${idPrefix}-school`}>
+        مدرسه{optionalHint ? ' (اختیاری)' : ''}
+      </Label>
       <Select value={value || undefined} onValueChange={onChange}>
         <SelectTrigger id={`${idPrefix}-school`} aria-label="انتخاب مدرسه">
-          <SelectValue placeholder="مدرسه را انتخاب کنید…" />
+          <SelectValue placeholder={allowNone ? 'بدون مدرسه' : 'مدرسه را انتخاب کنید…'} />
         </SelectTrigger>
         <SelectContent>
+          {allowNone && <SelectItem value="NONE">بدون مدرسه</SelectItem>}
           {schools.map((s) => (
             <SelectItem key={s.id} value={s.id}>
               {s.name}
@@ -325,6 +337,11 @@ function SchoolSelect({
           ))}
         </SelectContent>
       </Select>
+      {optionalHint && (
+        <p className="text-[11px] text-muted-foreground">
+          برای نقش مدیر مدرسه انتخاب مدرسه الزامی نیست — می‌توانید بعداً از «ویرایش کاربر» مدرسه اختصاص دهید.
+        </p>
+      )}
     </div>
   )
 }
@@ -646,10 +663,45 @@ export function SingleAddUserForm({
   const [classroomId, setClassroomId] = useState('')
   const [creating, setCreating] = useState(false)
 
+  // درس‌های مدرسه — فیلد چندانتخابی درس برای ایجاد معلم (درخواست کاربر؛ فقط scope مدرسه)
+  const [lessons, setLessons] = useState<LessonOption[] | null>(null)
+  const [selectedLessons, setSelectedLessons] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (scope !== 'school') return
+    let alive = true
+    ;(async () => {
+      try {
+        const res = await fetch('/api/lessons')
+        if (res.ok && alive) {
+          const d = await res.json()
+          setLessons(d.lessons ?? [])
+        } else if (alive) setLessons([])
+      } catch {
+        if (alive) setLessons([])
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [scope])
+
+  function toggleLesson(id: string) {
+    setSelectedLessons((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
   /** تغییر نقش/مدرسه — انتخاب کلاس ریست شود */
   function changeRole(v: string) {
-    setRole(v as 'STUDENT' | 'TEACHER' | 'SCHOOL_VICE' | 'SCHOOL_ADMIN')
+    const nextRole = v as 'STUDENT' | 'TEACHER' | 'SCHOOL_VICE' | 'SCHOOL_ADMIN'
+    setRole(nextRole)
     setClassroomId('')
+    // «بدون مدرسه» فقط برای مدیر مدرسه معتبر است — با تغییر نقش پاک شود
+    if (schoolId === 'NONE' && nextRole !== 'SCHOOL_ADMIN') setSchoolId('')
   }
   function changeSingleSchool(v: string) {
     setSchoolId(v)
@@ -672,7 +724,11 @@ export function SingleAddUserForm({
           nationalId: toEnDigits(nationalId).trim(),
           phone: toEnDigits(phone).trim(),
           classroomId: role === 'STUDENT' ? classroomId : null,
-          ...(scope === 'platform' ? { schoolId } : {}),
+          // درس‌های معلم — فیلد چندانتخابی (درخواست کاربر)
+          ...(role === 'TEACHER' && scope === 'school' ? { lessonIds: [...selectedLessons] } : {}),
+          ...(scope === 'platform'
+            ? { schoolId: schoolId === 'NONE' ? null : schoolId }
+            : {}),
         }),
       })
       const data = await res.json()
@@ -682,13 +738,17 @@ export function SingleAddUserForm({
       }
       toast({
         title: `${roleLabel(role)} «${data.user.fullName}» ایجاد شد`,
-        description: 'نام کاربری: کدملی — رمز عبور: 123456',
+        description:
+          role === 'TEACHER' && scope === 'school' && selectedLessons.size > 0
+            ? `نام کاربری: کدملی — رمز عبور: 123456 — ${faNum(selectedLessons.size)} درس منتسب شد`
+            : 'نام کاربری: کدملی — رمز عبور: 123456',
       })
       setFirstName('')
       setLastName('')
       setNationalId('')
       setPhone('')
       setClassroomId('')
+      setSelectedLessons(new Set())
       await onCreated?.()
     } catch {
       toast({ title: 'خطا در برقراری ارتباط با سرور', variant: 'destructive' })
@@ -697,11 +757,15 @@ export function SingleAddUserForm({
     }
   }
 
+  // مدرسه برای مدیر مدرسه اختیاری است (بدون مدرسه مجاز) — سایر نقش‌ها الزامی
+  const schoolRequired = scope === 'platform' && role !== 'SCHOOL_ADMIN'
+  const schoolValue = schoolId === 'NONE' ? '' : schoolId
+
   const canSubmit =
     firstName.trim().length >= 2 &&
     lastName.trim().length >= 2 &&
     toEnDigits(nationalId).trim().length >= 4 &&
-    (scope === 'school' || !!schoolId) &&
+    (scope === 'school' || !schoolRequired || !!schoolValue) &&
     (role !== 'STUDENT' || !!classroomId)
 
   return (
@@ -743,7 +807,14 @@ export function SingleAddUserForm({
 
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {scope === 'platform' && (
-              <SchoolSelect schools={schools} value={schoolId} onChange={changeSingleSchool} idPrefix="single" />
+              <SchoolSelect
+                schools={schools}
+                value={schoolId}
+                onChange={changeSingleSchool}
+                idPrefix="single"
+                allowNone={role === 'SCHOOL_ADMIN'}
+                optionalHint={role === 'SCHOOL_ADMIN'}
+              />
             )}
             <div className="space-y-1.5">
               <Label htmlFor="su-first">نام</Label>
@@ -800,6 +871,16 @@ export function SingleAddUserForm({
               />
             )}
           </div>
+
+          {/* درس‌های معلم — فیلد چندانتخابی (درخواست کاربر؛ فقط پنل مدرسه) */}
+          {role === 'TEACHER' && scope === 'school' && (
+            <LessonPicker
+              lessons={lessons}
+              selected={selectedLessons}
+              onToggle={toggleLesson}
+              idPrefix="single"
+            />
+          )}
 
           <Button type="submit" size="sm" className="gap-1.5" disabled={creating || !canSubmit}>
             {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
@@ -1105,7 +1186,78 @@ export function SubjectGroupPicker({
   )
 }
 
-/** فرم مستقل ایجاد معلم — انتخاب گروه‌های درسی معلم الزامی است (درخواست کاربر) */
+/** گزینهٔ درس مدرسه — برای فیلد چندانتخابی درس در فرم ایجاد معلم (درخواست کاربر) */
+export interface LessonOption {
+  id: string
+  name: string
+}
+
+/**
+ * فیلد چندانتخابی درس‌ها (درخواست کاربر — برای ایجاد معلم):
+ * هر معلم یک یا چند درس می‌گیرد — چیدمان چیپ (chip) لمس‌پذیر.
+ */
+export function LessonPicker({
+  lessons,
+  selected,
+  onToggle,
+  idPrefix,
+}: {
+  lessons: LessonOption[] | null
+  selected: Set<string>
+  onToggle: (id: string) => void
+  idPrefix: string
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={`${idPrefix}-lessons`}>درس‌ها</Label>
+        <span className="text-[11px] text-muted-foreground">
+          {faNum(selected.size)} درس انتخاب شده
+        </span>
+      </div>
+      {lessons === null ? (
+        <div className="h-16 rounded-xl border flex items-center justify-center">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : lessons.length === 0 ? (
+        <p
+          className="text-xs text-amber-600 rounded-xl border border-dashed py-4 text-center px-3"
+          data-testid="lessons-empty-hint"
+        >
+          هنوز درسی برای این مدرسه ثبت نشده است؛ ابتدا از باکس «درس‌ها» در پنل مدیریت مدرسه درس بسازید.
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-2" id={`${idPrefix}-lessons`}>
+          {lessons.map((l) => {
+            const checked = selected.has(l.id)
+            return (
+              <button
+                key={l.id}
+                type="button"
+                role="checkbox"
+                aria-checked={checked}
+                aria-label={`درس ${l.name}`}
+                data-testid="lesson-chip"
+                onClick={() => onToggle(l.id)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  checked
+                    ? 'border-primary bg-primary/10 text-primary font-medium'
+                    : 'bg-card text-muted-foreground hover:bg-accent/40 hover:text-foreground',
+                )}
+              >
+                {checked ? <Check className="h-3.5 w-3.5" /> : <BookMarked className="h-3.5 w-3.5" />}
+                {l.name}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** فرم مستقل ایجاد معلم — گروه‌های درسی اختیاری است (درخواست کاربر؛ بعداً هم قابل انتساب است) */
 export function TeacherAddForm({
   scope,
   onCreated,
@@ -1115,6 +1267,9 @@ export function TeacherAddForm({
 }) {
   const [groups, setGroups] = useState<GroupOption[] | null>(null)
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set())
+  // درس‌های مدرسه — فیلد چندانتخابی درس برای ایجاد معلم (درخواست کاربر)
+  const [lessons, setLessons] = useState<LessonOption[] | null>(null)
+  const [selectedLessons, setSelectedLessons] = useState<Set<string>>(new Set())
 
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
@@ -1142,8 +1297,37 @@ export function TeacherAddForm({
     }
   }, [scope])
 
+  // درس‌های مدرسه — برای انتخاب درس‌های معلم (درخواست کاربر)
+  useEffect(() => {
+    if (scope !== 'school') return
+    let alive = true
+    ;(async () => {
+      try {
+        const res = await fetch('/api/lessons')
+        if (res.ok && alive) {
+          const d = await res.json()
+          setLessons(d.lessons ?? [])
+        } else if (alive) setLessons([])
+      } catch {
+        if (alive) setLessons([])
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [scope])
+
   function toggleGroup(id: string) {
     setSelectedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleLesson(id: string) {
+    setSelectedLessons((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -1166,6 +1350,7 @@ export function TeacherAddForm({
           nationalId: toEnDigits(nationalId).trim(),
           phone: toEnDigits(phone).trim(),
           subjectGroupIds: [...selectedGroups],
+          lessonIds: [...selectedLessons],
         }),
       })
       const data = await res.json()
@@ -1175,13 +1360,22 @@ export function TeacherAddForm({
       }
       toast({
         title: `معلم «${data.user.fullName}» ایجاد شد`,
-        description: `نام کاربری: کدملی — رمز عبور: 123456 — ${faNum(selectedGroups.size)} گروه درسی منتسب شد`,
+        description: [
+          'نام کاربری: کدملی — رمز عبور: 123456',
+          selectedLessons.size > 0
+            ? `${faNum(selectedLessons.size)} درس منتسب شد`
+            : 'بدون درس (بعداً از ویرایش کاربر قابل انتساب است)',
+          selectedGroups.size > 0 ? `${faNum(selectedGroups.size)} گروه درسی منتسب شد` : undefined,
+        ]
+          .filter(Boolean)
+          .join(' — '),
       })
       setFirstName('')
       setLastName('')
       setNationalId('')
       setPhone('')
       setSelectedGroups(new Set())
+      setSelectedLessons(new Set())
       await onCreated?.()
     } catch {
       toast({ title: 'خطا در برقراری ارتباط با سرور', variant: 'destructive' })
@@ -1194,7 +1388,6 @@ export function TeacherAddForm({
     firstName.trim().length >= 2 &&
     lastName.trim().length >= 2 &&
     toEnDigits(nationalId).trim().length >= 4 &&
-    selectedGroups.size > 0 &&
     !creating
 
   return (
@@ -1205,7 +1398,7 @@ export function TeacherAddForm({
           ایجاد معلم
         </CardTitle>
         <CardDescription>
-          برای هر معلم، گروه‌های درسی او باید انتخاب شوند — نام کاربری کدملی و رمز اولیه ۱۲۳۴۵۶ است
+          نام کاربری کدملی و رمز اولیه ۱۲۳۴۵۶ است — انتخاب گروه‌های درسی اختیاری است و بعداً هم می‌توانید منتسب کنید
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -1266,9 +1459,23 @@ export function TeacherAddForm({
             idPrefix="teacher"
           />
           {selectedGroups.size === 0 && (
-            <p className="text-[11px] text-amber-600 flex items-center gap-1">
+            <p className="text-[11px] text-muted-foreground flex items-center gap-1">
               <Info className="h-3 w-3" />
-              انتخاب حداقل یک گروه درسی برای ایجاد معلم الزامی است.
+              انتخاب گروه درسی اختیاری است — بعداً از «ویرایش کاربر» یا «مدیریت گروه‌ها» هم می‌توانید منتسب کنید.
+            </p>
+          )}
+
+          {/* درس‌های معلم — فیلد چندانتخابی (درخواست کاربر) */}
+          <LessonPicker
+            lessons={lessons}
+            selected={selectedLessons}
+            onToggle={toggleLesson}
+            idPrefix="teacher"
+          />
+          {lessons !== null && lessons.length > 0 && selectedLessons.size === 0 && (
+            <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+              <Info className="h-3 w-3" />
+              می‌توانید یک یا چند درس به این معلم منتسب کنید — درس‌های معلم مبنای فیلد «درس» در ثبت نمره‌اند.
             </p>
           )}
 

@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin, jsonError } from '@/lib/api-auth'
+import { requireSchoolManager, jsonError } from '@/lib/api-auth'
 import {
   createUserAccount,
   normalizeNationalId,
   parseRoleToken,
   type CreatableRole,
 } from '@/lib/user-admin'
+import { vicePermissionDenied } from '@/lib/vice-permissions'
 
-/** لیست معلم‌ها و دانش‌آموزان مدرسه با جست‌وجو و صفحه‌بندی */
+/** لیست معلم‌ها و دانش‌آموزان مدرسه با جست‌وجو و صفحه‌بندی — مدیر و معاون (مشاهده) */
 export async function GET(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager()
   if ('response' in res) return res.response
 
   const sp = req.nextUrl.searchParams
@@ -53,6 +54,10 @@ export async function GET(req: NextRequest) {
             subjectGroup: { select: { id: true, name: true, classroom: { select: { name: true } } } },
           },
         },
+        // درس‌های منتسب به معلم (درخواست کاربر — نمایش و ویرایش در دیالوگ کاربر)
+        teacherLessons: {
+          select: { lesson: { select: { id: true, name: true } } },
+        },
         // استثناهای عضویت گروه دانش‌آموز (برای ویرایش کلاس‌ها و گروه‌ها)
         groupMemberOverrides: { select: { subjectGroupId: true, action: true } },
       },
@@ -81,6 +86,10 @@ export async function GET(req: NextRequest) {
             subjectGroup: { select: { id: true, name: true, classroom: { select: { name: true } } } },
           },
         },
+        // درس‌های منتسب به معلم (درخواست کاربر — نمایش و ویرایش در دیالوگ کاربر)
+        teacherLessons: {
+          select: { lesson: { select: { id: true, name: true } } },
+        },
         // استثناهای عضویت گروه دانش‌آموز (برای ویرایش کلاس‌ها و گروه‌ها)
         groupMemberOverrides: { select: { subjectGroupId: true, action: true } },
       },
@@ -94,11 +103,12 @@ export async function GET(req: NextRequest) {
 
 /**
  * ایجاد حساب تکی (درخواست کاربر):
- * فیلدها: نام، نام خانوادگی، نقش، کدملی، شماره تماس، کلاس (دانش‌آموز)، گروه‌های درسی (معلم — الزامی)
+ * فیلدها: نام، نام خانوادگی، نقش، کدملی، شماره تماس (اختیاری)، کلاس (دانش‌آموز)، گروه‌های درسی (اختیاری)
  * نام کاربری = کدملی؛ رمز عبور پیش‌فرض = 123456
+ * معاون: ثبت‌نام معلم/دانش‌آموز فقط با مجوز مربوطه؛ ایجاد معاون فقط توسط مدیر مدرسه
  */
 export async function POST(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager()
   if ('response' in res) return res.response
 
   const body = await req.json().catch(() => null)
@@ -107,15 +117,30 @@ export async function POST(req: NextRequest) {
     return jsonError('نقش باید معلم، معاون یا دانش‌آموز باشد')
   }
 
-  // ایجاد معلم بدون گروه درسی مجاز نیست (درخواست کاربر — انتخاب گروه‌های درسی الزامی است)
-  // معاون مدرسه گروه درسی اختیاری دارد (لزوماً درس تدریس نمی‌کند)
+  // ایجاد معاون فقط توسط خود مدیر مدرسه (معاون، معاون نمی‌سازد)
+  if (role === 'SCHOOL_VICE' && res.session.role === 'SCHOOL_VICE') {
+    return jsonError('ایجاد حساب معاون فقط توسط مدیر مدرسه انجام می‌شود', 403)
+  }
+  // ثبت‌نام معلم/دانش‌آموز — قابل محدودیت برای معاون (سوییچ مدیر)
+  if (res.session.role === 'SCHOOL_VICE') {
+    const perm = role === 'TEACHER' ? 'register_teachers' : 'register_students'
+    const denied = await vicePermissionDenied(res.session, perm)
+    if (denied) return denied
+  }
+
+  // گروه‌های درسی معلم/معاون اختیاری است (درخواست کاربر) — بعداً از ویرایش کاربر یا
+  // مدیریت گروه‌ها هم قابل انتساب است؛ معاون لزوماً درس تدریس نمی‌کند
   let subjectGroupIds: string[] = []
   if (role === 'TEACHER' || role === 'SCHOOL_VICE') {
     const rawIds: unknown[] = Array.isArray(body?.subjectGroupIds) ? body.subjectGroupIds : []
     subjectGroupIds = [...new Set(rawIds.map((v) => String(v)))]
-    if (role === 'TEACHER' && subjectGroupIds.length === 0) {
-      return jsonError('برای ایجاد معلم، انتخاب حداقل یک گروه درسی الزامی است')
-    }
+  }
+
+  // درس‌های منتسب به معلم — فیلد چندانتخابی فرم ایجاد معلم (درخواست کاربر)
+  let lessonIds: string[] = []
+  if (role === 'TEACHER' || role === 'SCHOOL_VICE') {
+    const rawLessonIds: unknown[] = Array.isArray(body?.lessonIds) ? body.lessonIds : []
+    lessonIds = [...new Set(rawLessonIds.map((v) => String(v)).filter(Boolean))]
   }
 
   const nationalId = normalizeNationalId(body?.nationalId ?? body?.username)
@@ -130,6 +155,7 @@ export async function POST(req: NextRequest) {
     phone: body?.phone ?? null,
     classroomId: body?.classroomId ?? null,
     subjectGroupIds,
+    lessonIds,
   })
   if (!result.ok) return jsonError(result.error, result.error.includes('قبلاً') ? 409 : 400)
 

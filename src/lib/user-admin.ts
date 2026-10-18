@@ -83,7 +83,9 @@ function uniqueError(e: unknown, field: 'username' | 'phone'): string | null {
 }
 
 export interface CreateUserAccountInput {
-  schoolId: string
+  /** مدرسه — برای مدیر مدرسه اختیاری است (سایر نقش‌ها الزامی)
+   * مدرسهٔ انتخابی بعداً از ویرایش کاربر قابل تغییر/تخصیص است */
+  schoolId: string | null
   role: CreatableRole
   firstName: string
   lastName: string
@@ -95,6 +97,8 @@ export interface CreateUserAccountInput {
   classroomId?: string | null
   /** فقط برای معلم/معاون — گروه‌های درسی مدرسه‌ی همان schoolId (برای معلم الزامی، برای معاون اختیاری) */
   subjectGroupIds?: string[]
+  /** فقط برای معلم — درس‌های منتسب (درخواست کاربر: فیلد چندانتخابی درس در فرم ایجاد معلم) */
+  lessonIds?: string[]
 }
 
 export type CreateUserAccountResult =
@@ -110,7 +114,9 @@ export type CreateUserAccountResult =
 export async function createUserAccount(
   input: CreateUserAccountInput,
 ): Promise<CreateUserAccountResult> {
-  const { schoolId, role, nationalId } = input
+  const { role, nationalId } = input
+  // مدیر مدرسه بدون مدرسه مجاز است — schoolId فقط برای نقش‌های وابسته به مدرسه الزامی است
+  const schoolId = input.schoolId?.trim() ? input.schoolId.trim() : null
 
   const firstName = String(input.firstName ?? '').trim()
   const lastName = String(input.lastName ?? '').trim()
@@ -118,7 +124,9 @@ export async function createUserAccount(
   if (nameErr) return { ok: false, error: nameErr }
 
   if (!CREATABE_ROLES.includes(role)) return { ok: false, error: 'نقش نامعتبر است' }
-  if (!schoolId) return { ok: false, error: 'مدرسه الزامی است' }
+  // مدیر مدرسه می‌تواند بدون مدرسه ساخته شود (اختیاری)؛ برای سایر نقش‌ها الزامی است
+  const needsSchool = role !== 'SCHOOL_ADMIN'
+  if (needsSchool && !schoolId) return { ok: false, error: 'مدرسه الزامی است' }
 
   if (!/^\d{4,20}$/.test(nationalId)) {
     return { ok: false, error: 'کدملی باید فقط عدد باشد (کدملی استاندارد ۱۰ رقم است)' }
@@ -144,9 +152,10 @@ export async function createUserAccount(
     return { ok: false, error: 'این کدملی قبلاً در پلتفرم ثبت شده است (نام کاربری تکراری)' }
   }
 
-  // کلاس فقط برای دانش‌آموز
+  // کلاس فقط برای دانش‌آموز — دانش‌آموز الزاماً مدرسه دارد (بررسی بالا)
   let classroomId: string | null = null
   if (role === 'STUDENT' && input.classroomId) {
+    if (!schoolId) return { ok: false, error: 'مدرسه الزامی است' }
     const classroom = await db.classroom.findFirst({
       where: { id: String(input.classroomId), schoolId },
       select: { id: true },
@@ -162,6 +171,7 @@ export async function createUserAccount(
     Array.isArray(input.subjectGroupIds) &&
     input.subjectGroupIds.length > 0
   ) {
+    if (!schoolId) return { ok: false, error: 'مدرسه الزامی است' }
     const requested = [...new Set(input.subjectGroupIds.map(String))]
     const validGroups = await db.subjectGroup.findMany({
       where: { id: { in: requested }, classroom: { schoolId } },
@@ -171,6 +181,25 @@ export async function createUserAccount(
       return { ok: false, error: 'یکی از گروه‌های درسی انتخابی در این مدرسه یافت نشد' }
     }
     subjectGroupIds = validGroups.map((g) => g.id)
+  }
+
+  // درس‌های معلم — همه باید متعلق به همان مدرسه باشند (درخواست کاربر)
+  let lessonIds: string[] = []
+  if (
+    (role === 'TEACHER' || role === 'SCHOOL_VICE') &&
+    Array.isArray(input.lessonIds) &&
+    input.lessonIds.length > 0
+  ) {
+    if (!schoolId) return { ok: false, error: 'مدرسه الزامی است' }
+    const requestedLessons = [...new Set(input.lessonIds.map(String))]
+    const validLessons = await db.lesson.findMany({
+      where: { id: { in: requestedLessons }, schoolId },
+      select: { id: true },
+    })
+    if (validLessons.length !== requestedLessons.length) {
+      return { ok: false, error: 'یکی از درس‌های انتخابی در این مدرسه یافت نشد' }
+    }
+    lessonIds = validLessons.map((l) => l.id)
   }
 
   const passwordHash = await hashPassword(DEFAULT_USER_PASSWORD)
@@ -191,6 +220,10 @@ export async function createUserAccount(
         // انتساب گروه‌های درسی معلم
         ...(subjectGroupIds.length > 0
           ? { teachingAssignments: { create: subjectGroupIds.map((subjectGroupId) => ({ subjectGroupId })) } }
+          : {}),
+        // انتساب درس‌های معلم (درخواست کاربر — فیلد چندانتخابی فرم ایجاد معلم)
+        ...(lessonIds.length > 0
+          ? { teacherLessons: { create: lessonIds.map((lessonId) => ({ lessonId })) } }
           : {}),
       },
     })

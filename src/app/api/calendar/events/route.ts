@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { jsonError, requireAppRole } from '@/lib/api-auth'
+import { viceHasPermission } from '@/lib/vice-permissions'
 import {
   canCreateClassEvent,
   canViewClassCalendar,
@@ -110,8 +111,8 @@ export async function POST(request: Request) {
   if (!parsedDate) return jsonError('تاریخ رویداد نامعتبر است', 400)
   if (!isValidEventType(type)) return jsonError('نوع رویداد نامعتبر است', 400)
 
-  // رویداد تعطیل فقط توسط مدیر مدرسه
-  if (type === 'HOLIDAY' && session.role !== 'SCHOOL_ADMIN') {
+  // رویداد تعطیل فقط توسط مدیر مدرسه و معاون (دسترسی کامل معاون — درخواست کاربر)
+  if (type === 'HOLIDAY' && session.role !== 'SCHOOL_ADMIN' && session.role !== 'SCHOOL_VICE') {
     return jsonError('ثبت رویداد «تعطیل» فقط توسط مدیر مدرسه امکان‌پذیر است', 403)
   }
 
@@ -133,13 +134,15 @@ export async function POST(request: Request) {
     if (customTitle.length > 60) return jsonError('نام رویداد حداکثر ۶۰ کاراکتر است', 400)
   }
 
-  // دامنه رویداد: مدیر می‌تواند «کل مدرسه» هم انتخاب کند؛ درخواست «کل مدرسه»
+  // دامنه رویداد: مدیر/معاون می‌تواند «کل مدرسه» هم انتخاب کند؛ درخواست «کل مدرسه»
   // از سمت معلم/دانش‌آموز مطلقاً رد می‌شود (۴۰۳) — نه تغییر بی‌صدا به کلاس
-  if (body.scope === 'SCHOOL' && session.role !== 'SCHOOL_ADMIN') {
+  const isSchoolManagerRole =
+    session.role === 'SCHOOL_ADMIN' || session.role === 'SCHOOL_VICE'
+  if (body.scope === 'SCHOOL' && !isSchoolManagerRole) {
     return jsonError('فقط مدیر مدرسه می‌تواند رویداد برای کل مدرسه ثبت کند', 403)
   }
   let scope: 'CLASS' | 'SCHOOL' =
-    session.role === 'SCHOOL_ADMIN' && body.scope === 'SCHOOL' ? 'SCHOOL' : 'CLASS'
+    isSchoolManagerRole && body.scope === 'SCHOOL' ? 'SCHOOL' : 'CLASS'
 
   // لینک تکلیف درسی — فقط نوع «تکلیف» و فقط معلمِ ایجادکنندهٔ همان تکلیف؛
   // رویداد «کل مدرسه» معنایی برای تکلیف گروه درسی ندارد
@@ -185,9 +188,15 @@ export async function POST(request: Request) {
       return jsonError('فقط می‌توانید برای کلاس‌های خودتان رویداد ثبت کنید', 403)
     }
   } else {
-    // رویداد کل مدرسه — بررسی دسترسی معلم منتسب معنا ندارد؛ فقط مدیر
-    if (session.role !== 'SCHOOL_ADMIN') {
+    // رویداد کل مدرسه — فقط مدیر/معاون؛ معاون نیازمند مجوز ثبت رویداد (سوییچ مدیر)
+    if (!isSchoolManagerRole) {
       return jsonError('فقط مدیر مدرسه می‌تواند رویداد برای کل مدرسه ثبت کند', 403)
+    }
+    if (session.role === 'SCHOOL_VICE') {
+      const ok = await viceHasPermission(session, 'calendar_events')
+      if (!ok) {
+        return jsonError('این دسترسی برای شما توسط مدیر مدرسه محدود شده است', 403)
+      }
     }
   }
 

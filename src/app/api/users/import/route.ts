@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin, jsonError } from '@/lib/api-auth'
+import { requireSchoolManager, jsonError } from '@/lib/api-auth'
 import {
   validateUserRows,
   commitValidRows,
   roleFa,
   type RawUserRow,
 } from '@/lib/user-admin'
+import { vicePermissionDenied } from '@/lib/vice-permissions'
 
 type ImportRow = RawUserRow
 
@@ -20,7 +21,7 @@ type ImportRow = RawUserRow
  * رمز همه کاربران جدید = 123456 (پیش‌فرض پلتفرم)
  */
 export async function POST(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager()
   if ('response' in res) return res.response
   const schoolId = res.session.schoolId
 
@@ -63,6 +64,22 @@ export async function POST(req: NextRequest) {
       },
       committed: false,
     })
+  }
+
+  // معاون — مجوزهای ثبت‌نام بر اساس نقش ردیف‌های سالم (سوییچ مدیر مدرسه):
+  // پیش‌نمایش آزاد است؛ ثبت واقعی نیازمند مجوز مربوطه است و ساختن معاون مجاز نیست
+  if (res.session.role === 'SCHOOL_VICE') {
+    if (valid.some((v) => v.role === 'SCHOOL_VICE')) {
+      return jsonError('ایجاد حساب معاون فقط توسط مدیر مدرسه انجام می‌شود', 403)
+    }
+    if (valid.some((v) => v.role === 'TEACHER')) {
+      const denied = await vicePermissionDenied(res.session, 'register_teachers')
+      if (denied) return denied
+    }
+    if (valid.some((v) => v.role === 'STUDENT')) {
+      const denied = await vicePermissionDenied(res.session, 'register_students')
+      if (denied) return denied
+    }
   }
 
   const committed = await commitValidRows(valid, { schoolId, classroomId })

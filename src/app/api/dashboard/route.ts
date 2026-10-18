@@ -15,25 +15,39 @@ export async function GET() {
     select: { name: true },
   })
 
-  if (session.role === 'SCHOOL_ADMIN') {
-    const [classCount, groupCount, teacherCount, studentCount, liveCount, pushSubs, annRows] =
-      await Promise.all([
-        db.classroom.count({ where: { schoolId } }),
-        db.subjectGroup.count({ where: { classroom: { schoolId } } }),
-        db.user.count({ where: { schoolId, role: 'TEACHER' } }),
-        db.user.count({ where: { schoolId, role: 'STUDENT' } }),
-        db.liveSession.count({ where: { classroom: { schoolId }, status: 'ACTIVE' } }),
-        db.pushSubscription.count({ where: { user: { schoolId } } }),
-        db.message.findMany({
-          where: {
-            isAnnouncement: true,
-            deletedAt: null,
-            subjectGroup: { classroom: { schoolId } },
-          },
-          select: { senderId: true, body: true, createdAt: true },
-          orderBy: { createdAt: 'asc' },
-        }),
-      ])
+  // آمار مدرسه برای مدیر و معاون — معاون همان هشت کارت هاب مدیریت مدرسه را می‌بیند
+  // (آیکون‌های هر کارت بر اساس مجوزهایش در سطح صفحه فیلتر می‌شوند)
+  if (session.role === 'SCHOOL_ADMIN' || session.role === 'SCHOOL_VICE') {
+    const [
+      classCount,
+      groupCount,
+      teacherCount,
+      studentCount,
+      viceCount,
+      liveCount,
+      pushSubs,
+      annRows,
+      lessonCount,
+    ] = await Promise.all([
+      db.classroom.count({ where: { schoolId } }),
+      db.subjectGroup.count({ where: { classroom: { schoolId } } }),
+      db.user.count({ where: { schoolId, role: 'TEACHER' } }),
+      db.user.count({ where: { schoolId, role: 'STUDENT' } }),
+      db.user.count({ where: { schoolId, role: 'SCHOOL_VICE' } }),
+      db.liveSession.count({ where: { classroom: { schoolId }, status: 'ACTIVE' } }),
+      db.pushSubscription.count({ where: { user: { schoolId } } }),
+      db.message.findMany({
+        where: {
+          isAnnouncement: true,
+          deletedAt: null,
+          subjectGroup: { classroom: { schoolId } },
+        },
+        select: { senderId: true, body: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      // درس‌های تعریف‌شدهٔ مدرسه (درخواست کاربر — باکس «درس‌ها»)
+      db.lesson.count({ where: { schoolId } }),
+    ])
 
     // هر اطلاعیه برای هر گروه هدف یک کپی پیام ایجاد می‌کند؛ رویدادهای تکراری
     // (فرستنده + متن + بازه ۱۰ ثانیه‌ای) به‌عنوان یک اطلاعیه شمرده می‌شوند
@@ -58,13 +72,15 @@ export async function GET() {
     })
 
     return NextResponse.json({
-      role: 'SCHOOL_ADMIN',
+      role: session.role,
       schoolName: school?.name ?? '',
       stats: [
         { key: 'classes', label: 'کلاس‌ها', value: classCount },
         { key: 'groups', label: 'گروه‌های درسی', value: groupCount },
         { key: 'teachers', label: 'معلمان', value: teacherCount },
+        { key: 'deputies', label: 'معاونین', value: viceCount },
         { key: 'students', label: 'دانش‌آموزان', value: studentCount },
+        { key: 'lessons', label: 'درس‌ها', value: lessonCount },
         { key: 'announcements', label: 'اطلاعیه‌ها', value: announcementCount },
         { key: 'onlineClasses', label: 'کلاس‌های آنلاین', value: liveCount },
         { key: 'notifications', label: 'اعلان‌ها', value: pushSubs },

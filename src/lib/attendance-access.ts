@@ -2,6 +2,7 @@ import { db } from '@/lib/db'
 import type { SessionPayload } from '@/lib/session'
 import { getSchoolFeatures } from '@/lib/chat-access'
 import { teacherAssignedToClassroom } from '@/lib/live-access'
+import { viceHasPermission } from '@/lib/vice-permissions'
 
 /**
  * موتور دسترسی حضور و غیاب — همه بررسی‌ها سمت سرور انجام می‌شود.
@@ -52,14 +53,18 @@ export async function accessibleClassrooms(
   }))
 }
 
-/** آیا این کاربر می‌تواند جلسه حضور و غیاب را ببیند/ویرایش کند؟ (معلم منتسب کلاس یا مدیر همان مدرسه) */
+/** آیا این کاربر می‌تواند جلسه حضور و غیاب را ببیند/ویرایش کند؟ (معلم منتسب کلاس یا مدیر/معاون همان مدرسه — معاون با مجوز attendance) */
 export async function canManageAttendanceSession(
   session: SessionPayload,
   att: { classroomId: string },
   classroomSchoolId: string,
 ): Promise<boolean> {
   if (!session.schoolId || session.schoolId !== classroomSchoolId) return false
-  if (session.role === 'SCHOOL_ADMIN' || session.role === 'SCHOOL_VICE') return true
+  if (session.role === 'SCHOOL_ADMIN') return true
+  if (session.role === 'SCHOOL_VICE') {
+    // معاون: مدیریت حضور و غیاب قابل محدودیت از طرف مدیر مدرسه است
+    return viceHasPermission(session, 'attendance')
+  }
   if (session.role === 'TEACHER') {
     return teacherAssignedToClassroom(session.uid, att.classroomId)
   }
@@ -75,3 +80,16 @@ export function statusLabel(s: string): string {
   if (s === 'ABSENT') return 'غایب'
   return 'ثبت‌نشده'
 }
+
+/**
+ * پیام اخطار اجباری‌بودن «عنوان نمره» (درخواست کاربر — عین متن):
+ * اگر معلم برای حداقل یک دانش‌آموز نمره ثبت کند و بدون عنوان نمره فرم را ثبت کند.
+ */
+export const GRADE_TITLE_REQUIRED_MSG =
+  'لطفاً عنوان نمره‌ای که برای دانش‌آموزان ثبت کرده‌اید را وارد نمایید'
+
+/**
+ * پیام اخطار اجباری‌بودن «درس» (درخواست کاربر):
+ * فیلد کشویی انتخاب درس اجباری است — بدون درس، نمره ثبت نمی‌شود.
+ */
+export const GRADE_LESSON_REQUIRED_MSG = 'لطفاً درس مربوط به نمرات ثبت‌شده را انتخاب کنید'

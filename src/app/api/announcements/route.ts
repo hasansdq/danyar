@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin, jsonError } from '@/lib/api-auth'
+import { requireSchoolManager, jsonError } from '@/lib/api-auth'
 import { getSchoolFeatures } from '@/lib/chat-access'
 import { serializeMessage, previewOf } from '@/lib/messaging'
 import {
@@ -15,7 +15,7 @@ import { notifySocket, roomForGroup } from '@/lib/notify'
  * اطلاعیه برای کلاس به همه گروه‌های فعال آن کلاس تحویل می‌شود.
  */
 export async function POST(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('announcements')
   if ('response' in res) return res.response
   const session = res.session
 
@@ -151,7 +151,7 @@ export async function POST(req: NextRequest) {
 
 /** فهرست کلاس‌ها و گروه‌های مدرسه برای انتخاب هدف اطلاعیه */
 export async function GET() {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('announcements')
   if ('response' in res) return res.response
 
   const classrooms = await db.classroom.findMany({

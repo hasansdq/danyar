@@ -1,15 +1,13 @@
 'use client'
 
 /**
- * کاربران مدرسه — پنل مدیر مدرسه (بازطراحی مرحله مدیریت کاربران):
- *  ۱) افزودن گروهی دانش‌آموزان بالای صفحه (لیست قابل گسترش + ثبت کل لیست)
- *  ۲) افزودن کاربر تکی (نام، نام خانوادگی، نقش، کدملی، شماره تماس، کلاس)
- *  ۳) ایمپورت اکسل با انتخاب کلاس + فایل نمونه
- *  ۴) فهرست، ویرایش، فعال/غیرفعال، حذف
+ * فهرست کاربران مدرسه — پنل مدیر مدرسه (درخواست کاربر: باکس‌های افزودن کاربر
+ * در صفحهٔ مجزای «افزودن کاربر» /modir/users/add قرار دارند):
+ * جست‌وجو، فیلتر نقش، صفحه‌بندی، ویرایش، فعال/غیرفعال، حذف
  * نام کاربری همه = کدملی؛ رمز پیش‌فرض = 123456؛ رمز ضعیف (فقط عدد/حرف) مجاز است.
  */
 
-import { useCallback, useEffect, useRef, useState, FormEvent } from 'react'
+import { useCallback, useEffect, useState, FormEvent } from 'react'
 import {
   Loader2,
   KeyRound,
@@ -17,10 +15,12 @@ import {
   Trash2,
   Search,
   Smartphone,
+  UserPlus,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { apiFetch } from '@/lib/client-api'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
@@ -41,16 +41,9 @@ import {
 } from '@/components/ui/dialog'
 import { toast } from '@/hooks/use-toast'
 import { faNum } from '@/lib/format'
-import {
-  BulkStudentAddForm,
-  StudentAddForm,
-  TeacherAddForm,
-  ViceAddForm,
-  ExcelImportForm,
-  SubjectGroupPicker,
-  type GroupOption,
-} from '@/components/user-add-forms'
+import { SubjectGroupPicker, LessonPicker, type GroupOption, type LessonOption } from '@/components/user-add-forms'
 import { Checkbox } from '@/components/ui/checkbox'
+import { UsersSubNav } from '@/components/users-subnav'
 
 interface SchoolUser {
   id: string
@@ -66,6 +59,8 @@ interface SchoolUser {
   teachingAssignments: {
     subjectGroup: { id: string; name: string; classroom: { name: string } }
   }[]
+  // درس‌های منتسب به معلم (درخواست کاربر — نمایش/ویرایش در دیالوگ کاربر)
+  teacherLessons?: { lesson: { id: string; name: string } }[]
   memberOverrides: { subjectGroupId: string; action: string }[]
 }
 
@@ -87,9 +82,36 @@ function splitName(u: SchoolUser): { first: string; last: string } {
   return { first: u.fullName.slice(0, sp), last: u.fullName.slice(sp + 1).trim() }
 }
 
-export function SchoolUsersClient() {
+/**
+ * مجوزهای معاون — null یعنی مدیر مدرسه (بدون محدودیت)؛
+ * برای معاون، نقشهٔ سوییچ‌های مدیر است (/modir/deputies)
+ */
+export interface VicePerms {
+  classes: boolean
+  groups: boolean
+  announcements: boolean
+  push_notifications: boolean
+  live: boolean
+  register_teachers: boolean
+  register_students: boolean
+  edit_users: boolean
+  delete_users: boolean
+  ai_assistant: boolean
+  attendance: boolean
+  calendar_events: boolean
+  [key: string]: boolean | undefined
+}
+
+export function SchoolUsersClient({ permissions = null }: { permissions?: VicePerms | null }) {
+  // مدیر مدرسه همه‌چیز را می‌تواند؛ معاون بر اساس سوییچ‌های مدیر
+  const isVice = permissions !== null
+  const canRegisterStudents = !isVice || !!permissions?.register_students
+  const canRegisterTeachers = !isVice || !!permissions?.register_teachers
+  const canEditUsers = !isVice || !!permissions?.edit_users
+  const canDeleteUsers = !isVice || !!permissions?.delete_users
   const [users, setUsers] = useState<SchoolUser[] | null>(null)
   const [total, setTotal] = useState(0)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
@@ -107,13 +129,11 @@ export function SchoolUsersClient() {
   // ویرایش کلاس‌ها و گروه‌های درسی کاربر (درخواست کاربر — مرحله مدیریت کاربران)
   const [editClassIds, setEditClassIds] = useState<Set<string> | null>(null)
   const [editGroupIds, setEditGroupIds] = useState<Set<string> | null>(null)
+  // درس‌های منتسب در ویرایش معلم (درخواست کاربر)
+  const [allLessons, setAllLessons] = useState<LessonOption[] | null>(null)
+  const [editLessonIds, setEditLessonIds] = useState<Set<string> | null>(null)
   const [allClasses, setAllClasses] = useState<ClassOptionLite[] | null>(null)
   const [allGroups, setAllGroups] = useState<GroupOption[] | null>(null)
-
-  // ورود از کارت‌های آماری با ?create=teacher|student — اسکرول به فرم مربوطه + برجسته‌سازی
-  const studentFormRef = useRef<HTMLDivElement>(null)
-  const teacherFormRef = useRef<HTMLDivElement>(null)
-  const [highlight, setHighlight] = useState<'teacher' | 'student' | null>(null)
 
   // حذف کاربر
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -123,17 +143,24 @@ export function SchoolUsersClient() {
   const [deleting, setDeleting] = useState(false)
 
   const load = useCallback(async () => {
+    setLoadError(null)
     const params = new URLSearchParams({
       page: String(page),
       pageSize: String(PAGE_SIZE),
       q: search,
     })
     if (role !== 'ALL') params.set('role', role)
-    const res = await fetch(`/api/users?${params.toString()}`)
+    // apiFetch: 401 (نشست باطل/زامبی) → هداشت خودکار به ورود
+    const res = await apiFetch(`/api/users?${params.toString()}`)
     if (res.ok) {
       const data = await res.json()
       setUsers(data.users)
       setTotal(data.total)
+    } else {
+      // نادیده‌گرفتن بی‌صدا = «لودینگ بی‌پایان» — پیام خطا + تلاش مجدد
+      const d = await res.json().catch(() => null)
+      setLoadError(d?.error ?? 'بارگذاری فهرست کاربران ناموفق بود')
+      setUsers([])
     }
   }, [page, search, role])
 
@@ -146,25 +173,6 @@ export function SchoolUsersClient() {
     const sp = new URLSearchParams(window.location.search)
     const r = sp.get('role')
     if (r === 'TEACHER' || r === 'SCHOOL_VICE' || r === 'STUDENT') setRole(r)
-  }, [])
-
-  // ?create=teacher|student — ورود از آیکون + کارت‌های آماری: اسکرول به فرم + برجسته‌سازی گذرا
-  useEffect(() => {
-    const sp = new URLSearchParams(window.location.search)
-    const c = sp.get('create')
-    if (c !== 'teacher' && c !== 'student') return
-    setHighlight(c)
-    const scrollT = setTimeout(() => {
-      ;(c === 'teacher' ? teacherFormRef : studentFormRef).current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      })
-    }, 400)
-    const clearT = setTimeout(() => setHighlight(null), 4500)
-    return () => {
-      clearTimeout(scrollT)
-      clearTimeout(clearT)
-    }
   }, [])
 
   // تغییر فیلتر نقش → بازگشت به صفحه اول
@@ -206,17 +214,24 @@ export function SchoolUsersClient() {
     setEditAdminPassword('')
     setEditClassIds(null)
     setEditGroupIds(null)
+    setEditLessonIds(null)
     void initEditSelections(u)
   }
 
-  /** بارگذاری کلاس‌ها و گروه‌های مدرسه (یک‌بار) و مقداردهی اولیه انتخاب‌های ویرایش */
+  /** بارگذاری کلاس‌ها، گروه‌ها و درس‌های مدرسه (یک‌بار) و مقداردهی اولیه انتخاب‌های ویرایش */
   async function initEditSelections(u: SchoolUser) {
     try {
-      const [clsRes, grpRes] = await Promise.all([fetch('/api/classes'), fetch('/api/groups')])
+      const [clsRes, grpRes, lsnRes] = await Promise.all([
+        fetch('/api/classes'),
+        fetch('/api/groups'),
+        fetch('/api/lessons'),
+      ])
       const cls = clsRes.ok ? ((await clsRes.json()).classrooms ?? []) : null
       const grp = grpRes.ok ? ((await grpRes.json()).groups ?? []) : null
+      const lsn = lsnRes.ok ? ((await lsnRes.json()).lessons ?? []) : null
       if (cls) setAllClasses(cls)
       if (grp) setAllGroups(grp)
+      if (lsn) setAllLessons(lsn)
 
       if (u.role === 'STUDENT') {
         setEditClassIds(new Set(u.enrollments.map((e) => e.classroom.id)))
@@ -234,6 +249,8 @@ export function SchoolUsersClient() {
         }
       } else if (u.role === 'TEACHER') {
         setEditGroupIds(new Set(u.teachingAssignments.map((t) => t.subjectGroup.id)))
+        // درس‌های فعلی معلم — پیش‌انتخاب در ویرایش
+        setEditLessonIds(new Set((u.teacherLessons ?? []).map((t) => t.lesson.id)))
       }
     } catch {
       /* بارگذاری ناموفق — بخش کلاس/گروه بدون انتخاب می‌ماند و بقیه فرم سالم است */
@@ -251,6 +268,15 @@ export function SchoolUsersClient() {
 
   function toggleEditGroup(id: string) {
     setEditGroupIds((prev) => {
+      const next = new Set(prev ?? [])
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleEditLesson(id: string) {
+    setEditLessonIds((prev) => {
       const next = new Set(prev ?? [])
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -280,6 +306,8 @@ export function SchoolUsersClient() {
         if (editGroupIds) payload.subjectGroupIds = [...editGroupIds]
       } else if (editUser.role === 'TEACHER') {
         if (editGroupIds) payload.subjectGroupIds = [...editGroupIds]
+        // درس‌های معلم (درخواست کاربر — ویرایش انتساب درس‌ها)
+        if (editLessonIds) payload.lessonIds = [...editLessonIds]
       }
       const res = await fetch(`/api/users/${editUser.id}`, {
         method: 'PATCH',
@@ -337,42 +365,31 @@ export function SchoolUsersClient() {
 
   return (
     <div className="max-w-4xl mx-auto px-3 py-5 sm:px-4 space-y-5">
-      <div>
-        <h1 className="text-xl font-bold">کاربران مدرسه</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          افزودن تکی و گروهی، ایمپورت اکسل، ویرایش و مدیریت وضعیت — نام کاربری هر کاربر کدملی و رمز
-          اولیه او ۱۲۳۴۵۶ است
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold">فهرست کاربران مدرسه</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            جست‌وجو، ویرایش و مدیریت وضعیت کاربران — نام کاربری هر کاربر کدملی است؛ افزودن کاربر
+            جدید در صفحهٔ «افزودن کاربر» انجام می‌شود
+          </p>
+          {isVice && (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              بخش‌هایی که مدیر مدرسه برای شما محدود کرده، اینجا نمایش داده نمی‌شوند.
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <UsersSubNav active="list" base="/modir/users" />
+          {(canRegisterStudents || canRegisterTeachers || !isVice) && (
+            <Button asChild size="sm" className="gap-1.5">
+              <a href="/modir/users/add" aria-label="افزودن کاربر جدید">
+                <UserPlus className="h-4 w-4" />
+                افزودن کاربر
+              </a>
+            </Button>
+          )}
+        </div>
       </div>
-
-      {/* ۱) افزودن گروهی دانش‌آموزان — بالای صفحه */}
-      <BulkStudentAddForm scope="school" onDone={load} />
-
-      {/* ۲) ایجاد دانش‌آموز — فرم مستقل (ورود از کارت آماری دانش‌آموزان با آیکون +) */}
-      <div
-        ref={studentFormRef}
-        className={`scroll-mt-4 rounded-xl transition-shadow ${
-          highlight === 'student' ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : ''
-        }`}
-      >
-        <StudentAddForm scope="school" onCreated={load} />
-      </div>
-
-      {/* ۳) ایجاد معلم — فرم مستقل با انتخاب الزامی گروه‌های درسی (ورود از کارت آماری معلمان با آیکون +) */}
-      <div
-        ref={teacherFormRef}
-        className={`scroll-mt-4 rounded-xl transition-shadow ${
-          highlight === 'teacher' ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : ''
-        }`}
-      >
-        <TeacherAddForm scope="school" onCreated={load} />
-      </div>
-
-      {/* ۴) ایجاد معاون مدرسه — فرم مستقل (گروه درسی اختیاری) */}
-      <ViceAddForm scope="school" onCreated={load} />
-
-      {/* ۵) ایمپورت اکسل */}
-      <ExcelImportForm scope="school" onDone={load} />
 
       {/* فهرست کاربران */}
       <Card>
@@ -412,7 +429,15 @@ export function SchoolUsersClient() {
           </div>
         </CardHeader>
         <CardContent>
-          {users === null ? (
+          {loadError ? (
+            <div className="flex flex-col items-center gap-3 py-8 text-center">
+              <p className="text-sm text-destructive">{loadError}</p>
+              <Button variant="outline" size="sm" onClick={() => void load()}>
+                <Loader2 className="h-4 w-4 me-1" />
+                تلاش مجدد
+              </Button>
+            </div>
+          ) : users === null ? (
             <div className="flex justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
@@ -423,7 +448,14 @@ export function SchoolUsersClient() {
           ) : (
             <div className="divide-y">
               {users.map((u) => (
-                <UserRow key={u.id} user={u} onEdit={openEdit} onToggle={toggleActive} onDelete={requestDelete} />
+                <UserRow
+                  key={u.id}
+                  user={u}
+                  onEdit={canEditUsers ? openEdit : undefined}
+                  onToggle={canEditUsers ? toggleActive : undefined}
+                  onDelete={canDeleteUsers ? requestDelete : undefined}
+                  showDeputiesLink={!isVice}
+                />
               ))}
             </div>
           )}
@@ -622,6 +654,16 @@ export function SchoolUsersClient() {
               />
             )}
 
+            {/* ─── درس‌های منتسب به معلم (درخواست کاربر — فیلد چندانتخابی درس) ─── */}
+            {editUser?.role === 'TEACHER' && allLessons !== null && (
+              <LessonPicker
+                lessons={allLessons}
+                selected={editLessonIds ?? new Set()}
+                onToggle={toggleEditLesson}
+                idPrefix="edit-teacher"
+              />
+            )}
+
             <Button type="submit" size="sm" className="gap-1.5" disabled={savingEdit}>
               {savingEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
               ذخیره تغییرات
@@ -680,11 +722,14 @@ function UserRow({
   onEdit,
   onToggle,
   onDelete,
+  showDeputiesLink = false,
 }: {
   user: SchoolUser
-  onEdit: (u: SchoolUser) => void
-  onToggle: (u: SchoolUser) => void
-  onDelete: (u: SchoolUser) => void
+  onEdit?: (u: SchoolUser) => void
+  onToggle?: (u: SchoolUser) => void
+  onDelete?: (u: SchoolUser) => void
+  /** لینک «دسترسی‌ها» روی ردیف معاون — فقط برای مدیر مدرسه */
+  showDeputiesLink?: boolean
 }) {
   return (
     <div className="py-3 flex items-center gap-3">
@@ -739,29 +784,42 @@ function UserRow({
         </div>
       </div>
       <div className="flex items-center gap-1 shrink-0">
-        <Switch
-          checked={u.isActive}
-          onCheckedChange={() => onToggle(u)}
-          aria-label={`فعال/غیرفعال ${u.fullName}`}
-        />
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          onClick={() => onEdit(u)}
-          aria-label={`ویرایش ${u.fullName}`}
-        >
-          <Pencil className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          onClick={() => onDelete(u)}
-          aria-label={`حذف ${u.fullName}`}
-        >
-          <Trash2 className="h-3.5 w-3.5 text-destructive" />
-        </Button>
+        {showDeputiesLink && u.role === 'SCHOOL_VICE' && (
+          <Button asChild variant="outline" size="sm" className="me-1 h-8 gap-1 text-xs">
+            <a href="/modir/deputies" aria-label={`دسترسی‌های ${u.fullName}`} title="مدیریت دسترسی‌های معاون">
+              دسترسی‌ها
+            </a>
+          </Button>
+        )}
+        {onToggle && (
+          <Switch
+            checked={u.isActive}
+            onCheckedChange={() => onToggle(u)}
+            aria-label={`فعال/غیرفعال ${u.fullName}`}
+          />
+        )}
+        {onEdit && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => onEdit(u)}
+            aria-label={`ویرایش ${u.fullName}`}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+        )}
+        {onDelete && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => onDelete(u)}
+            aria-label={`حذف ${u.fullName}`}
+          >
+            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+          </Button>
+        )}
       </div>
     </div>
   )

@@ -196,10 +196,11 @@ export async function getAccessibleGroup(
 
   if (group.scope === 'CLASS') {
     if (!group.classroom) return null
-    if (session.role === 'SCHOOL_ADMIN') {
+    // مدیر و معاون مدرسه: همهٔ گروه‌های کلاسی مدرسه خودشان (معاون = دسترسی کامل مدیر)
+    if (session.role === 'SCHOOL_ADMIN' || session.role === 'SCHOOL_VICE') {
       return group.classroom.schoolId === session.schoolId ? group : null
     }
-    if (session.role === 'TEACHER' || session.role === 'SCHOOL_VICE') {
+    if (session.role === 'TEACHER') {
       const assigned = await db.teachingAssignment.findFirst({
         where: { teacherId: session.uid, subjectGroupId: groupId },
       })
@@ -303,7 +304,8 @@ export async function checkGroupSendPermission(
 export async function listAccessibleGroupIds(
   session: SessionPayload,
 ): Promise<string[]> {
-  if (session.role === 'SCHOOL_ADMIN' && session.schoolId) {
+  // مدیر و معاون مدرسه: همهٔ گروه‌های مدرسه (معاون = دسترسی کامل مدیر)
+  if ((session.role === 'SCHOOL_ADMIN' || session.role === 'SCHOOL_VICE') && session.schoolId) {
     const groups = await db.subjectGroup.findMany({
       where: {
         OR: [{ classroom: { schoolId: session.schoolId } }, { schoolId: session.schoolId }],
@@ -312,7 +314,7 @@ export async function listAccessibleGroupIds(
     })
     return groups.map((g) => g.id)
   }
-  if (session.role === 'TEACHER' || session.role === 'SCHOOL_VICE') {
+  if (session.role === 'TEACHER') {
     const rows = await db.teachingAssignment.findMany({
       where: { teacherId: session.uid },
       select: { subjectGroupId: true },

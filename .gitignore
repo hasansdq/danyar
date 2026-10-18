@@ -59,7 +59,8 @@ server.log
 # بستهٔ استقرار با scripts/rebuild-deploy-archive.sh از فایل‌های tracked ساخته می‌شود؛
 # استقرار داکر socket-server.mjs را داخل ایمیج از سورس می‌سازد (Dockerfile) و
 # دیتابیس VPS با migrations+seed ساخته می‌شود — هیچ‌کدام لازم نیستند tracked باشند.
-/download/
+# ⚠ download/ عمداً tracked است (درخواست کاربر: بستهٔ نهایی باید در نمای کد دیده شود)
+# — اسکریپت بسته، محتویات download/ را خودش از فهرست فایل‌ها حذف می‌کند (بدون بازگشتی)
 /upload/
 /tool-results/
 /socket-server.mjs
@@ -75,6 +76,7 @@ server.log
 !.env.example
 /.tools/turnserver
 /.tools/turnserver-preview.conf
+# نسخهٔ سرو‌شده در public فقط مصنوعات runtime است — نسخهٔ قابل‌مشاهده در download/ است
 /public/*repo*.tar.gz
 *.db-wal
 *.db-shm

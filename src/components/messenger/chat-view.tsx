@@ -54,6 +54,7 @@ import { EmojiPicker } from './emoji-picker'
 import { VoiceRecorderPanel, type VoiceRecording } from './voice-recorder'
 import { GroupMembersDialog } from './group-members-dialog'
 import { GroupSettingsDialog } from './group-settings-dialog'
+import { useDialogHistory, wasDialogPopstate } from '@/lib/dialog-history'
 import { chatTime } from '@/lib/format'
 import { formatSize, type ChatMessage, type ConversationMeta, type ChatUser, type GroupSearchHit } from './types'
 
@@ -320,6 +321,7 @@ export function ChatView({ kind, targetId, me }: ChatViewProps) {
         id: string
         archived: boolean
         policy: string
+        lockedForStudents?: boolean
         name?: string
         avatarVersion?: number
       },
@@ -331,6 +333,10 @@ export function ChatView({ kind, targetId, me }: ChatViewProps) {
               ...prev,
               archived: g.archived,
               policy: g.policy,
+              lockedForStudents:
+                g.lockedForStudents !== undefined
+                  ? g.lockedForStudents
+                  : g.policy === 'STAFF' || g.policy === 'ADMINS',
               title: g.name ?? prev.title,
               avatarUrl:
                 g.avatarVersion !== undefined
@@ -986,7 +992,9 @@ export function ChatView({ kind, targetId, me }: ChatViewProps) {
   // ─── قفل/باز کردن گروه برای دانش‌آموزان (معلم منتسب / مدیر مدرسه) ───
   const toggleLock = useCallback(async () => {
     if (!meta || kind !== 'group') return
-    const next = !(meta.policy === 'STAFF' || meta.policy === 'ADMINS')
+    const next = !(
+      meta.lockedForStudents || meta.policy === 'STAFF' || meta.policy === 'ADMINS'
+    )
     setLockPending(true)
     try {
       const res = await fetch(`/api/groups/${targetId}`, {
@@ -999,7 +1007,20 @@ export function ChatView({ kind, targetId, me }: ChatViewProps) {
         toast.error(data?.error ?? 'تغییر وضعیت قفل گروه ناموفق بود')
         return
       }
-      setMeta((prev) => (prev ? { ...prev, policy: next ? 'STAFF' : 'ALL' } : prev))
+      // سرور هر دو فیلد (policy + lockedForStudents) را هم‌زمان برمی‌گرداند —
+      // وضعیت محلی از پاسخ سرور ساخته می‌شود تا با پنل مدیریت هم‌خوان بماند
+      setMeta((prev) =>
+        prev
+          ? {
+              ...prev,
+              policy: data?.group?.messagePolicy ?? (next ? 'STAFF' : 'ALL'),
+              lockedForStudents:
+                data?.group?.lockedForStudents !== undefined
+                  ? data.group.lockedForStudents
+                  : next,
+            }
+          : prev,
+      )
       toast.success(
         next
           ? 'گروه برای دانش‌آموزان قفل شد'
@@ -1054,6 +1075,45 @@ export function ChatView({ kind, targetId, me }: ChatViewProps) {
     setSearchHits(null)
   }, [])
 
+  // پنل جست‌وجوی درون گروهی هم مثل پنجره‌ها با دکمهٔ back موبایل بسته می‌شود (درخواست کاربر)
+  useDialogHistory(searchOpen, (next) => (next ? openSearch() : closeSearch()))
+
+  // دکمهٔ بازگشت موبایل: اگر ورود به این گفتگو از فهرست گفتگوها بوده (نشان
+  // sessionStorage)، back طبیعی بدون افزودن ورودی history؛ ورود از اعلان/لینک
+  // مستقیم → هدایت به فهرست گفتگوها
+  const goBackToConversations = useCallback(() => {
+    let enteredFromList = false
+    try {
+      enteredFromList = sessionStorage.getItem('daniar-chat-entry') === 'list'
+      sessionStorage.removeItem('daniar-chat-entry')
+    } catch {
+      /* private mode */
+    }
+    if (enteredFromList) router.back()
+    else router.push('/')
+  }, [router])
+
+  // دکمهٔ back سیستم‌عامل داخل گروه/گفتگو: خروج از گفتگو و نمایش فهرست گفتگوها
+  // (درخواست کاربر) — اگر مقصد popstate خودِ گفتگوی دیگری است (ورود زنجیره‌ای از
+  // اعلان/فروارد)، به‌جای گفتگوی قبلی فهرست گفتگوها جایگزین می‌شود.
+  // اگر back صرفِ بستن پنجره/پنل جست‌وجو بوده، ناوبری نادیده گرفته می‌شود
+  useEffect(() => {
+    const onPopState = () => {
+      if (wasDialogPopstate()) return
+      let p = ''
+      try {
+        p = window.location.pathname
+      } catch {
+        return
+      }
+      if (/^\/chats\/(group|dm)\//.test(p)) {
+        router.replace('/')
+      }
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [router])
+
   const openSearchHit = useCallback(
     (id: string) => {
       closeSearch()
@@ -1094,8 +1154,10 @@ export function ChatView({ kind, targetId, me }: ChatViewProps) {
   // دسترسی‌های هدر گروه — اجرای نهایی مجوزها همیشه سمت سرور است
   const isGroup = kind === 'group'
   const canManageGroup = isGroup && (me.role === 'TEACHER' || me.role === 'SCHOOL_ADMIN')
+  // وضعیت قفل یکسان با پنل مدیریت (درخواست کاربر):
+  // policy STAFF/ADMINS یا پرچم lockedForStudents — هر یک قفل یعنی قفل
   const lockedForStudents =
-    meta?.policy === 'STAFF' || meta?.policy === 'ADMINS'
+    !!meta?.lockedForStudents || meta?.policy === 'STAFF' || meta?.policy === 'ADMINS'
   const canLockGroup =
     canManageGroup && !(me.role === 'TEACHER' && meta?.policy === 'ADMINS')
 
@@ -1124,7 +1186,7 @@ export function ChatView({ kind, targetId, me }: ChatViewProps) {
           variant="ghost"
           size="icon"
           className="lg:hidden shrink-0"
-          onClick={() => router.push('/')}
+          onClick={goBackToConversations}
           aria-label="بازگشت"
         >
           <ArrowRight className="h-5 w-5" />
@@ -1526,7 +1588,7 @@ export function ChatView({ kind, targetId, me }: ChatViewProps) {
                 size="icon"
                 className="shrink-0"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={uploading || !connected}
+                disabled={uploading || !connected || initialLoading}
                 aria-label="پیوست فایل"
                 title="ارسال تصویر، فایل، صوت یا ویدئو"
               >
@@ -1541,7 +1603,7 @@ export function ChatView({ kind, targetId, me }: ChatViewProps) {
                 size="icon"
                 className="shrink-0"
                 onClick={startRecording}
-                disabled={uploading || !connected}
+                disabled={uploading || !connected || initialLoading}
                 aria-label="ضبط پیام صوتی"
                 title="ضبط پیام صوتی"
               >
@@ -1557,17 +1619,17 @@ export function ChatView({ kind, targetId, me }: ChatViewProps) {
                     doSend()
                   }
                 }}
-                placeholder="پیام…"
+                placeholder={initialLoading ? 'در حال بارگذاری گفتگو…' : 'پیام…'}
                 rows={1}
                 className="min-h-10 max-h-32 resize-none text-sm"
                 aria-label="متن پیام"
               />
-              <EmojiPicker onPick={insertEmoji} disabled={!connected} />
+              <EmojiPicker onPick={insertEmoji} disabled={!connected || initialLoading} />
               <Button
                 size="icon"
                 className="shrink-0"
                 onClick={doSend}
-                disabled={sending || (!text.trim() && !pending)}
+                disabled={sending || initialLoading || (!text.trim() && !pending)}
                 aria-label="ارسال"
               >
                 <Send className="h-4.5 w-4.5 -scale-x-100" />
@@ -1622,6 +1684,9 @@ export function ChatView({ kind, targetId, me }: ChatViewProps) {
                     ...prev,
                     ...(patch.name !== undefined ? { title: patch.name } : {}),
                     ...(patch.policy !== undefined ? { policy: patch.policy } : {}),
+                    ...(patch.lockedForStudents !== undefined
+                      ? { lockedForStudents: patch.lockedForStudents }
+                      : {}),
                     ...(patch.avatarUrl !== undefined ? { avatarUrl: patch.avatarUrl } : {}),
                   }
                 : prev,

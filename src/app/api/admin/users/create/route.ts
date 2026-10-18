@@ -24,10 +24,16 @@ export async function POST(req: NextRequest) {
     return jsonError('نقش باید دانش‌آموز، معلم یا مدیر مدرسه باشد')
   }
 
-  const schoolId = String(body?.schoolId ?? '')
-  if (!schoolId) return jsonError('انتخاب مدرسه الزامی است')
-  const school = await db.school.findUnique({ where: { id: schoolId }, select: { id: true } })
-  if (!school) return jsonError('مدرسه یافت نشد', 404)
+  const schoolId = String(body?.schoolId ?? '').trim()
+  // مدرسه برای مدیر مدرسه اختیاری است — کاربر بدون مدرسه ساخته می‌شود و
+  // بعداً از «ویرایش کاربر» می‌توان مدرسه اختصاص داد (درخواست کاربر)
+  if (!schoolId && role !== 'SCHOOL_ADMIN') {
+    return jsonError('انتخاب مدرسه الزامی است')
+  }
+  if (schoolId) {
+    const school = await db.school.findUnique({ where: { id: schoolId }, select: { id: true } })
+    if (!school) return jsonError('مدرسه یافت نشد', 404)
+  }
 
   const nationalId = normalizeNationalId(body?.nationalId ?? body?.username)
   if (!nationalId) return jsonError('کدملی باید فقط عدد باشد (کدملی استاندارد ۱۰ رقم است)')

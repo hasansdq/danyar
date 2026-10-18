@@ -17,12 +17,8 @@ async function main() {
   }
 
   const initialPassword = process.env.SUPERADMIN_INITIAL_PASSWORD?.trim()
-  if (!initialPassword) {
-    console.error(
-      '[seed] حساب مدیر کل وجود ندارد و SUPERADMIN_INITIAL_PASSWORD تنظیم نشده است.\n' +
-        'در .env سرور یک رمز امن تعیین کنید (حداقل ۱۲ کاراکتر) و دوباره تلاش کنید.',
-    )
-    process.exit(1)
+  if (!initialPassword || initialPassword.length < 12) {
+    throw new Error('[seed] SUPERADMIN_INITIAL_PASSWORD باید حداقل ۱۲ کاراکتر باشد؛ حسابی با رمز پیش‌فرض ساخته نمی‌شود.')
   }
 
   await db.user.create({

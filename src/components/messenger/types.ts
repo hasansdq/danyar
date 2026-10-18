@@ -74,6 +74,8 @@ export interface ConversationMeta {
   title: string
   subtitle: string
   policy?: string
+  /** قفل گروه برای دانش‌آموزان — هم‌خوان با policy (STAFF/ADMINS = قفل) */
+  lockedForStudents?: boolean
   archived?: boolean
   /** تصویر پروفایل گروه (فقط GROUP) */
   avatarUrl?: string | null

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin } from '@/lib/api-auth'
+import { requireSchoolManager } from '@/lib/api-auth'
 
 /** فهرست گفتگوهای خصوصی کاربر با دستیار */
 export async function GET() {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('ai_assistant')
   if ('response' in res) return res.response
   const uid = res.session.uid
 
@@ -42,7 +42,7 @@ export async function GET() {
 
 /** ایجاد گفتگوی جدید */
 export async function POST(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('ai_assistant')
   if ('response' in res) return res.response
 
   const body = await req.json().catch(() => ({}))

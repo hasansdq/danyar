@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CalendarCheck2, Loader2, Plus, BarChart3 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -32,13 +32,18 @@ interface DayAttendanceDialogProps {
   dateKey: string | null
   classId: string
   className: string
+  /** نقش کاربر — ویرایشگر جلسه ستون «نمره» را فقط برای معلم نشان می‌دهد */
+  role?: string
 }
 
 /**
- * دیالوگ «ثبت غیبت‌های امروز» — ادغام حضور و غیاب در تقویم آموزشی:
+ * دیالوگ «ثبت غیبت و تخلفات» — ادغام حضور و غیاب و تخلفات در تقویم آموزشی:
  * - اگر برای (کلاس، روز) جلسه‌ای وجود داشته باشد ویرایشگر همان جلسه باز می‌شود
  * - در غیر این صورت با یک کلیک جلسه جدید ساخته می‌شود (همه دانش‌آموزان پیش‌فرض حاضر)
- * - ویرایشگر جلسه: لیست دانش‌آموزان با چک‌باکس حاضری، یادداشت غیبت، پیش‌نویس و نهایی‌سازی
+ * - معلم (درخواست کاربر): جلسهٔ خودش انتخاب می‌شود؛ اگر جلسهٔ خودش نباشد، جلسهٔ جدید
+ *   برای او به‌صورت خودکار ساخته می‌شود — معلم هرگز فرم معلم دیگر را ویرایش نمی‌کند
+ * - ویرایشگر جلسه: لیست دانش‌آموزان با چک‌باکس حاضری، پیش‌نویس و نهایی‌سازی
+ * - معلم: ستون «نمره» + فیلدهای «عنوان نمره» و «درس» (اجباری) نیز دارد (درخواست کاربر)
  */
 export function DayAttendanceDialog({
   open,
@@ -46,12 +51,15 @@ export function DayAttendanceDialog({
   dateKey,
   classId,
   className,
+  role,
 }: DayAttendanceDialogProps) {
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  // ساخت خودکار جلسهٔ معلم (درخواست کاربر) — یک تلاش برای هر (کلاس، روز) در هر باز شدن
+  const autoCreateTried = useRef<string | null>(null)
 
   const loadSessions = useCallback(async () => {
     if (!classId || !dateKey) return
@@ -70,9 +78,14 @@ export function DayAttendanceDialog({
       }
       const list: SessionSummary[] = d.sessions ?? []
       setSessions(list)
-      // اولویت با جلسه پیش‌نویسِ همان روز؛ سپس جدیدترین جلسه
+      // معلم (درخواست کاربر): اولویت با جلسهٔ خودش — جلسهٔ معلم دیگر فقط-مشاهده است.
+      // مدیر/معاون: اولویت با جلسه پیش‌نویسِ همان روز؛ سپس جدیدترین جلسه
       const preferred =
-        list.find((s) => s.status === 'DRAFT') ?? (list.length ? list[0] : null)
+        role === 'TEACHER'
+          ? list.find((s) => s.isMine && s.status === 'DRAFT') ??
+            list.find((s) => s.isMine) ??
+            null
+          : list.find((s) => s.status === 'DRAFT') ?? (list.length ? list[0] : null)
       setActiveSessionId(preferred?.id ?? null)
     } catch {
       setError('اتصال برقرار نشد')
@@ -118,17 +131,32 @@ export function DayAttendanceDialog({
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
 
+  // ── ساخت خودکار جلسهٔ معلم (درخواست کاربر) ──
+  // معلم بدون جلسهٔ خودش در این روز → جلسهٔ جدید برای او ساخته می‌شود (یک تلاش در هر باز شدن)
+  useEffect(() => {
+    if (!open || role !== 'TEACHER' || loading || !classId || !dateKey) return
+    if (sessions.some((s) => s.isMine)) return
+    const key = `${classId}:${dateKey}`
+    if (autoCreateTried.current === key) return
+    autoCreateTried.current = key
+    void createSession()
+  }, [open, role, loading, sessions, classId, dateKey])
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl" dir="rtl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base sm:text-lg">
             <CalendarCheck2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-            ثبت حضور و غیاب — {dateKey ? formatJalaliDate(dateKey, { withWeekday: true }) : ''}
+            ثبت حضور و غیاب و تخلفات — {dateKey ? formatJalaliDate(dateKey, { withWeekday: true }) : ''}
           </DialogTitle>
           <DialogDescription>
             لیست دانش‌آموزان کلاس «{className}» — هر دانش‌آموز پیش‌فرض «حاضر» است؛
-            چک‌باکس را بردارید تا «غایب» ثبت شود (با امکان یادداشت غیبت).
+            چک‌باکس را بردارید تا «غایب» ثبت شود.
+            برای ثبت تخلف، روی آیکون منفی (−) روبروی نام دانش‌آموز کلیک و انواع تخلف را از فهرست انتخاب کنید.
+            {role === 'TEACHER'
+              ? ' برای ثبت نمره، ستون «نمره» روبروی هر دانش‌آموز را پر کنید (عنوان نمره و درس در پایین لیست — درس اجباری است).'
+              : ''}
           </DialogDescription>
         </DialogHeader>
 
@@ -144,24 +172,20 @@ export function DayAttendanceDialog({
               تلاش مجدد
             </Button>
           </div>
-        ) : sessions.length === 0 ? (
+        ) : sessions.length === 0 && !creating ? (
           <div className="space-y-4 py-2 text-center" data-testid="attendance-empty">
             <p className="text-sm text-muted-foreground">
               برای این روز هنوز جلسه حضور و غیابی ثبت نشده است.
             </p>
             <Button onClick={createSession} disabled={creating} data-testid="create-attendance-button">
-              {creating ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  در حال آماده‌سازی لیست…
-                </>
-              ) : (
-                <>
-                  <Plus className="h-4 w-4" />
-                  شروع ثبت غیبت‌های امروز
-                </>
-              )}
+              <Plus className="h-4 w-4" />
+              شروع ثبت غیبت و تخلفات
             </Button>
+          </div>
+        ) : sessions.length === 0 && creating ? (
+          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            در حال آماده‌سازی جلسهٔ شما…
           </div>
         ) : (
           <div className="space-y-3">
@@ -178,7 +202,13 @@ export function DayAttendanceDialog({
                   <SelectContent>
                     {sessions.map((s) => (
                       <SelectItem key={s.id} value={s.id}>
-                        {s.title} — {s.status === 'FINALIZED' ? 'نهایی‌شده' : 'پیش‌نویس'}
+                        {s.title} —{' '}
+                        {s.isMine
+                          ? 'جلسهٔ شما'
+                          : s.creatorName
+                            ? `${s.creatorName} (فقط مشاهده)`
+                            : ''}
+                        {s.status === 'FINALIZED' ? ' · نهایی‌شده' : ' · پیش‌نویس'}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -231,6 +261,7 @@ export function DayAttendanceDialog({
               <AttendanceSessionEditor
                 key={activeSessionId}
                 sessionId={activeSessionId}
+                role={role}
                 onSessionUpdated={loadSessions}
               />
             )}

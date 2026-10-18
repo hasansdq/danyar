@@ -19,7 +19,9 @@ import {
   isValidEventType,
   type ClassEventType,
 } from '@/lib/calendar-events'
-import { parseDateKey, todayDateKey, monthRange, formatJalaliDate, weekdayOfDateKey, JALALI_WEEKDAYS_FULL } from '@/lib/jalali'
+import { parseDateKey, todayDateKey, monthRange, formatJalaliDate, weekdayOfDateKey, JALALI_WEEKDAYS_FULL, dateKeyShiftDays, dateKeyToUtcDate, dateKeyOf } from '@/lib/jalali'
+import { toJalaali } from 'jalaali-js'
+import { scoreToNumber, avgOf, cmpDateKey } from '@/lib/performance'
 import type { Prisma } from '@prisma/client'
 import type { ToolDef } from './provider'
 
@@ -130,6 +132,60 @@ export const AI_TOOLS: ToolDef[] = [
         query: { type: 'string', description: 'جست‌وجو در عنوان/موضوع/توضیحات (اختیاری)' },
         publishedOnly: { type: 'boolean', description: 'true → فقط منتشرشده‌ها (پیش‌فرض همه)' },
         limit: { type: 'integer', description: 'بیشینه تعداد (۱ تا ۲۵، پیش‌فرض ۱۵)' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'student_performance',
+    description:
+      'گزارش عملکرد دانش‌آموزان مدرسه: تعداد تخلفات، تعداد غیبت‌ها (فقط جلسات نهایی‌شده)، میانگین نمرات عددی، تعداد نمرات و آخرین نمرهٔ هر دانش‌آموز. مرتب‌سازی بر اساس معیار درخواستی — برای پرسش‌هایی مثل «دانش‌آموزان با بیشترین تخلف و غیبت».',
+    parameters: {
+      type: 'object',
+      properties: {
+        classId: { type: 'string', description: 'شناسه کلاس برای محدودکردن (اختیاری)' },
+        metric: { type: 'string', description: 'معیار مرتب‌سازی نزولی: violations (تخلفات) | absences (غیبت‌ها) | combined (تخلف+غیبت) | grade (میانگین نمرات) — پیش‌فرض combined' },
+        limit: { type: 'integer', description: 'بیشینه تعداد دانش‌آموز (۱ تا ۳۰، پیش‌فرض ۱۰)' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'day_agenda',
+    description:
+      'برنامهٔ کامل یک روز مدرسه: رویدادهای تقویم آموزشی (امتحان، تعطیل، جشن و…)، تکالیف درسی واقعی که مهلت‌شان در آن روز است و جلسات حضور و غیاب همان روز. روز را با تاریخ جلالی صریح یا نسبت به امروز مشخص کن (0=امروز، 1=فردا، 2=پس‌فردا، -1=دیروز). برای پرسش‌هایی مثل «فردا چه تکلیفی دارند؟».',
+    parameters: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: 'تاریخ جلالی با قالب 1404-07-21 (اختیاری؛ اگر داده نشود dayOffset ملاک است)' },
+        dayOffset: { type: 'integer', description: 'فاصلهٔ روز از امروز: 0=امروز، 1=فردا، 2=پس‌فردا، -1=دیروز (اختیاری؛ پیش‌فرض 0)' },
+        classId: { type: 'string', description: 'شناسه کلاس برای محدودکردن تکالیف و جلسات (اختیاری؛ رویدادهای کل‌مدرسه هم برمی‌گردند)' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'live_sessions',
+    description:
+      'استریم‌های کلاس آنلاین مدرسه: جلسات در حال پخش (زنده) یا پایان‌یافته با کلاس، معلم برگزارکننده، عنوان، زمان شروع/پایان و تعداد شرکت‌کنندگان.',
+    parameters: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: 'active → فقط جلسات زنده | ended → فقط پایان‌یافته | all → همه (پیش‌فرض active)' },
+        limit: { type: 'integer', description: 'بیشینه تعداد (۱ تا ۲۰، پیش‌فرض ۱۰)' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'grades_stats',
+    description:
+      'آمار نمرات ثبت‌شدهٔ مدرسه: تعداد کل نمرات، میانگین درس‌به‌درس (ریاضی، علوم و…)، میانگین کلاس‌به‌کلاس و آخرین نمرات با نام دانش‌آموز، درس، عنوان و تاریخ جلالی. نمرات عددی (از جمله ارقام فارسی) محاسبه می‌شوند؛ نمرات توصیفی در آمار عددی حساب نمی‌شوند.',
+    parameters: {
+      type: 'object',
+      properties: {
+        classId: { type: 'string', description: 'شناسه کلاس برای محدودکردن (اختیاری)' },
+        limit: { type: 'integer', description: 'بیشینه تعداد نمرات اخیر (۱ تا ۲۵، پیش‌فرض ۱۰)' },
       },
       additionalProperties: false,
     },
@@ -250,6 +306,10 @@ export const TOOL_STATUS_LABEL: Record<string, string> = {
   create_calendar_event: 'در حال ثبت رویداد در تقویم…',
   update_calendar_event: 'در حال ویرایش رویداد تقویم…',
   delete_calendar_event: 'در حال حذف رویداد تقویم…',
+  student_performance: 'در حال محاسبه گزارش عملکرد دانش‌آموزان…',
+  day_agenda: 'در حال بررسی برنامهٔ روز…',
+  live_sessions: 'در حال بررسی استریم‌های کلاس آنلاین…',
+  grades_stats: 'در حال محاسبه آمار نمرات…',
 }
 
 /** تبدیل ارقام فارسی/عربی به لاتین برای پذیرش تاریخ از خروجی مدل */
@@ -267,6 +327,15 @@ function parseEventDate(v: unknown): string | null {
   if (!p) return null
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${p.jy}-${pad(p.jm)}-${pad(p.jd)}`
+}
+
+/** کلید جلالی از تاریخ UTC یک Date — مهلت تکالیف در این برنامه زمانِ محلیِ انتخابی
+ *  معلم را بدون تبدیل منطقه‌ای ذخیره می‌کنند (۲۳:۵۹ روز مقصد = همان روز به وقت UTC)؛
+ *  بنابراین «روزِ» مهلت با تاریخ UTC استخراج می‌شود تا با نیت معلم هم‌راستا بماند. */
+function utcDateKeyOf(d: Date): string {
+  const j = toJalaali(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate())
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${j.jy}-${pad(j.jm)}-${pad(j.jd)}`
 }
 
 /** اعتبارسنجی ماه جلالی 1404-07 → بازه کلیدهای ماه یا null */
@@ -687,12 +756,473 @@ async function toolStudentDetail(schoolId: string, argsJson: string): Promise<To
     }
   })
 
+  // ── عملکرد تحصیلی-انضباطی (درخواست کاربر — دستیار به نمرات/غیبت/تخلف هم دسترسی دارد) ──
+  const [violationCount, absenceCount, perfGrades] = await Promise.all([
+    db.studentViolation.count({ where: { studentId, classroom: { schoolId } } }),
+    db.attendanceRecord.count({
+      where: { studentId, status: 'ABSENT', session: { status: 'FINALIZED', classroom: { schoolId } } },
+    }),
+    db.studentGrade.findMany({
+      where: {
+        studentId,
+        classroom: { schoolId },
+        OR: [{ session: { status: 'FINALIZED' } }, { sessionId: null }],
+      },
+      select: {
+        score: true,
+        title: true,
+        dateKey: true,
+        lesson: { select: { name: true } },
+        creator: { select: { fullName: true } },
+      },
+      orderBy: [{ dateKey: 'desc' }, { createdAt: 'desc' }],
+      take: 50,
+    }),
+  ])
+  const perfNums = perfGrades.map((g) => scoreToNumber(g.score)).filter((n): n is number => n !== null)
+  const recentViolations = await db.studentViolation.findMany({
+    where: { studentId, classroom: { schoolId } },
+    select: { dateKey: true, text: true, creator: { select: { fullName: true } } },
+    orderBy: [{ dateKey: 'desc' }, { createdAt: 'desc' }],
+    take: 5,
+  })
+
   return {
     result: JSON.stringify({
       student: { id: student.id, name: student.fullName, username: student.username, isActive: student.isActive },
       classes: classes.map((c) => c.name),
       groups: groups.map((g) => `${g.name} (${g.classroom?.name ?? ''})`),
       assignments: items,
+      performance: {
+        violationCount,
+        absentCount: absenceCount,
+        numericGradeCount: perfNums.length,
+        avgScore: avgOf(perfNums),
+        lastGrades: perfGrades.slice(0, 5).map((g) => ({
+          score: g.score,
+          title: g.title,
+          lesson: g.lesson?.name ?? null,
+          teacher: g.creator.fullName,
+          dateKey: g.dateKey,
+          dateFa: formatJalaliDate(g.dateKey),
+        })),
+        recentViolations: recentViolations.map((v) => ({
+          text: v.text,
+          dateKey: v.dateKey,
+          dateFa: formatJalaliDate(v.dateKey),
+          creator: v.creator.fullName,
+        })),
+      },
+    }),
+    refs: dedupeRefs(refs),
+  }
+}
+
+// ─── ابزارهای عملکرد دانش‌آموزان، دستور روز، استریم و نمرات (درخواست کاربر) ───
+
+/** گزارش عملکرد دانش‌آموزان — همان منطق گزارش عملکرد مدیر (تخلف/غیبت/میانگین/آخرین نمره) */
+async function toolStudentPerformance(schoolId: string, argsJson: string): Promise<ToolExecResult> {
+  const args = parseArgs(argsJson)
+  const refs: AiRef[] = []
+
+  let classroomId: string | undefined
+  if (typeof args.classId === 'string' && args.classId) {
+    const c = await ownClass(schoolId, args.classId)
+    if (!c) return errorResult('کلاس موردنظر در مدرسه شما یافت نشد')
+    classroomId = c.id
+    refs.push({ kind: 'class', id: c.id, title: c.name })
+  }
+  const metric =
+    args.metric === 'violations' || args.metric === 'absences' || args.metric === 'grade'
+      ? args.metric
+      : 'combined'
+  const limitRaw = Number(args.limit ?? 10)
+  const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 10, 1), 30)
+
+  const students = await db.user.findMany({
+    where: {
+      schoolId,
+      role: 'STUDENT',
+      ...(classroomId ? { enrollments: { some: { classroomId } } } : {}),
+    },
+    select: {
+      id: true,
+      fullName: true,
+      username: true,
+      isActive: true,
+      enrollments: { select: { classroom: { select: { name: true } } } },
+    },
+    orderBy: { fullName: 'asc' },
+  })
+  if (!students.length) {
+    return { result: JSON.stringify({ count: 0, students: [] }), refs: dedupeRefs(refs) }
+  }
+  const studentIds = students.map((s) => s.id)
+
+  const [violationCounts, absenceCounts, grades] = await Promise.all([
+    db.studentViolation.groupBy({
+      by: ['studentId'],
+      where: { studentId: { in: studentIds }, classroom: { schoolId } },
+      _count: { _all: true },
+    }),
+    db.attendanceRecord.groupBy({
+      by: ['studentId'],
+      where: {
+        studentId: { in: studentIds },
+        status: 'ABSENT',
+        session: { status: 'FINALIZED', classroom: { schoolId } },
+      },
+      _count: { _all: true },
+    }),
+    db.studentGrade.findMany({
+      where: {
+        studentId: { in: studentIds },
+        classroom: { schoolId },
+        OR: [{ session: { status: 'FINALIZED' } }, { sessionId: null }],
+      },
+      select: {
+        studentId: true,
+        score: true,
+        title: true,
+        dateKey: true,
+        createdAt: true,
+        lesson: { select: { name: true } },
+      },
+    }),
+  ])
+  const violationMap = new Map(violationCounts.map((v) => [v.studentId, v._count._all]))
+  const absenceMap = new Map(absenceCounts.map((a) => [a.studentId, a._count._all]))
+
+  const gradeAgg = new Map<
+    string,
+    {
+      nums: number[]
+      last: {
+        score: string
+        title: string
+        lessonName: string | null
+        dateKey: string
+        createdAt: Date
+      } | null
+    }
+  >()
+  for (const g of grades) {
+    const cur = gradeAgg.get(g.studentId) ?? { nums: [], last: null }
+    const num = scoreToNumber(g.score)
+    if (num !== null) cur.nums.push(num)
+    // آخرین نمره: dateKey بزرگ‌تر؛ در تساوی، createdAt جدیدتر (همان منطق گزارش عملکرد مدیر)
+    if (
+      !cur.last ||
+      cmpDateKey(g.dateKey, cur.last.dateKey) > 0 ||
+      (g.dateKey === cur.last.dateKey && g.createdAt > cur.last.createdAt)
+    ) {
+      cur.last = {
+        score: g.score,
+        title: g.title,
+        lessonName: g.lesson?.name ?? null,
+        dateKey: g.dateKey,
+        createdAt: g.createdAt,
+      }
+    }
+    gradeAgg.set(g.studentId, cur)
+  }
+
+  const rows = students.map((s) => {
+    const agg = gradeAgg.get(s.id)
+    const violations = violationMap.get(s.id) ?? 0
+    const absences = absenceMap.get(s.id) ?? 0
+    return {
+      id: s.id,
+      name: s.fullName,
+      username: s.username,
+      isActive: s.isActive,
+      classes: s.enrollments.map((e) => e.classroom.name),
+      violationCount: violations,
+      absentCount: absences,
+      combined: violations + absences,
+      avgScore: avgOf(agg?.nums ?? []),
+      numericGradeCount: agg?.nums.length ?? 0,
+      lastGrade: agg?.last ?? null,
+    }
+  })
+
+  rows.sort((a, b) => {
+    if (metric === 'violations') return b.violationCount - a.violationCount || a.name.localeCompare(b.name, 'fa')
+    if (metric === 'absences') return b.absentCount - a.absentCount || a.name.localeCompare(b.name, 'fa')
+    if (metric === 'grade') {
+      const av = a.avgScore ?? -1
+      const bv = b.avgScore ?? -1
+      return bv - av || a.name.localeCompare(b.name, 'fa')
+    }
+    return b.combined - a.combined || a.name.localeCompare(b.name, 'fa')
+  })
+  const top = rows.slice(0, limit)
+  for (const s of top) refs.push({ kind: 'student', id: s.id, title: s.name })
+
+  return {
+    result: JSON.stringify({
+      count: top.length,
+      totalStudents: rows.length,
+      truncated: rows.length > top.length,
+      metric,
+      students: top.map((s) => ({
+        id: s.id,
+        name: s.name,
+        classes: s.classes,
+        violationCount: s.violationCount,
+        absentCount: s.absentCount,
+        avgScore: s.avgScore,
+        numericGradeCount: s.numericGradeCount,
+        lastGrade: s.lastGrade,
+      })),
+    }),
+    refs: dedupeRefs(refs),
+  }
+}
+
+/** دستور کامل یک روز: رویدادهای تقویم + تکالیف دارای مهلت همان روز + جلسات حضور و غیاب */
+async function toolDayAgenda(schoolId: string, argsJson: string): Promise<ToolExecResult> {
+  const args = parseArgs(argsJson)
+  const refs: AiRef[] = []
+
+  // تاریخ هدف: صریح جلالی یا نسبت به امروز (0=امروز، 1=فردا…)
+  let dateKey: string
+  if (typeof args.date === 'string' && args.date.trim()) {
+    const parsed = parseEventDate(args.date)
+    if (!parsed) return errorResult('تاریخ جلالی نامعتبر است؛ قالب صحیح: 1404-07-21')
+    dateKey = parsed
+  } else {
+    const offsetRaw = Number(args.dayOffset ?? 0)
+    const offset = Number.isFinite(offsetRaw) ? Math.min(Math.max(Math.trunc(offsetRaw), -30), 30) : 0
+    const shifted = dateKeyShiftDays(todayDateKey(), offset)
+    if (!shifted) return errorResult('محاسبه تاریخ ممکن نشد')
+    dateKey = shifted
+  }
+
+  let classroomId: string | undefined
+  if (typeof args.classId === 'string' && args.classId) {
+    const c = await ownClass(schoolId, args.classId)
+    if (!c) return errorResult('کلاس موردنظر در مدرسه شما یافت نشد')
+    classroomId = c.id
+    refs.push({ kind: 'class', id: c.id, title: c.name })
+  }
+
+  // رویدادهای تقویم همان روز (رویدادهای کل‌مدرسه هم شامل‌اند)
+  const events = await db.classEvent.findMany({
+    where: {
+      schoolId,
+      dateKey,
+      ...(classroomId ? { OR: [{ classroomId }, { classroomId: null }] } : {}),
+    },
+    include: {
+      classroom: { select: { id: true, name: true } },
+      createdBy: { select: { fullName: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: 60,
+  })
+  for (const ev of events) refs.push(...eventRefs(ev))
+
+  // تکالیف درسی واقعی که مهلت‌شان در همان روز است — پنجرهٔ ±۲ روز سپس تطبیق دقیق کلید جلالی
+  const dayUtc = dateKeyToUtcDate(dateKey)
+  if (dayUtc) {
+    const winStart = new Date(dayUtc)
+    winStart.setUTCDate(winStart.getUTCDate() - 2)
+    const winEnd = new Date(dayUtc)
+    winEnd.setUTCDate(winEnd.getUTCDate() + 2)
+    const due = await db.assignment.findMany({
+      where: {
+        dueAt: { gte: winStart, lte: winEnd },
+        subjectGroup: { classroom: classroomId ? { id: classroomId } : { schoolId } },
+      },
+      include: {
+        subjectGroup: { select: { id: true, name: true, classroom: { select: { id: true, name: true } } } },
+        createdBy: { select: { fullName: true } },
+      },
+    })
+    for (const a of due) {
+      if (!a.dueAt || utcDateKeyOf(a.dueAt) !== dateKey) continue
+      refs.push({ kind: 'assignment', id: a.id, title: a.title })
+      if (a.subjectGroup.classroom) refs.push({ kind: 'class', id: a.subjectGroup.classroom.id, title: a.subjectGroup.classroom.name })
+      refs.push({ kind: 'group', id: a.subjectGroup.id, title: a.subjectGroup.name })
+    }
+    const homeworkDue = due
+      .filter((a) => a.dueAt && utcDateKeyOf(a.dueAt) === dateKey)
+      .map((a) => ({
+        id: a.id,
+        title: a.title,
+        class: a.subjectGroup.classroom?.name ?? '',
+        group: a.subjectGroup.name,
+        teacher: a.createdBy.fullName,
+        dueAt: a.dueAt!.toISOString(),
+        answerMode: a.answerMode,
+        maxGrade: a.maxGrade,
+      }))
+
+    // جلسات حضور و غیاب همان روز + شمار غایبان
+    const sessions = await db.attendanceSession.findMany({
+      where: { classroom: classroomId ? { id: classroomId } : { schoolId }, dateKey },
+      include: {
+        classroom: { select: { id: true, name: true } },
+        records: { select: { status: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    })
+
+    return {
+      result: JSON.stringify({
+        dateKey,
+        dateFa: formatJalaliDate(dateKey, { withWeekday: true }),
+        weekday: JALALI_WEEKDAYS_FULL[weekdayOfDateKey(dateKey)],
+        isToday: dateKey === todayDateKey(),
+        events: events.map((ev) => ({
+          id: ev.id,
+          type: ev.type,
+          typeLabel: CLASS_EVENT_TYPE_LABELS[ev.type as ClassEventType] ?? ev.type,
+          title: eventDisplayTitle(ev.type, ev.customTitle),
+          schoolWide: !ev.classroomId,
+          class: ev.classroom?.name ?? null,
+          description: ev.description || null,
+          linkedAssignment: !!ev.assignmentId,
+          createdBy: ev.createdBy.fullName,
+        })),
+        homeworkDue,
+        attendanceSessions: sessions.map((s) => ({
+          id: s.id,
+          title: s.title,
+          class: s.classroom.name,
+          status: s.status === 'FINALIZED' ? 'نهایی‌شده' : 'پیش‌نویس',
+          absents: s.records.filter((r) => r.status === 'ABSENT').length,
+          presents: s.records.filter((r) => r.status === 'PRESENT').length,
+        })),
+      }),
+      refs: dedupeRefs(refs),
+    }
+  }
+  return errorResult('تاریخ نامعتبر است')
+}
+
+/** استریم‌های کلاس آنلاین مدرسه — زنده یا پایان‌یافته */
+async function toolLiveSessions(schoolId: string, argsJson: string): Promise<ToolExecResult> {
+  const args = parseArgs(argsJson)
+  const status = args.status === 'ended' || args.status === 'all' ? args.status : 'active'
+  const limitRaw = Number(args.limit ?? 10)
+  const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 10, 1), 20)
+
+  const sessions = await db.liveSession.findMany({
+    where: {
+      classroom: { schoolId },
+      ...(status !== 'all' ? { status: status === 'active' ? 'ACTIVE' : 'ENDED' } : {}),
+    },
+    include: {
+      classroom: { select: { id: true, name: true } },
+      host: { select: { id: true, fullName: true } },
+      participantLogs: { select: { userId: true, role: true } },
+    },
+    orderBy: { startedAt: 'desc' },
+    take: limit,
+  })
+
+  const refs: AiRef[] = []
+  const rows = sessions.map((s) => {
+    refs.push({ kind: 'class', id: s.classroom.id, title: s.classroom.name })
+    refs.push({ kind: 'teacher', id: s.host.id, title: s.host.fullName })
+    const studentCount = new Set(s.participantLogs.filter((p) => p.role === 'STUDENT').map((p) => p.userId)).size
+    return {
+      id: s.id,
+      title: s.title,
+      class: s.classroom.name,
+      teacher: s.host.fullName,
+      status: s.status === 'ACTIVE' ? 'زنده' : 'پایان‌یافته',
+      startedAt: s.startedAt.toISOString(),
+      endedAt: s.endedAt?.toISOString() ?? null,
+      announced: !!s.announcedAt,
+      studentParticipants: studentCount,
+    }
+  })
+
+  return {
+    result: JSON.stringify({ count: rows.length, status, sessions: rows }),
+    refs: dedupeRefs(refs),
+  }
+}
+
+/** آمار نمرات مدرسه — میانگین درس‌به‌درس و کلاس‌به‌کلاس + آخرین نمرات */
+async function toolGradesStats(schoolId: string, argsJson: string): Promise<ToolExecResult> {
+  const args = parseArgs(argsJson)
+  const refs: AiRef[] = []
+
+  let classroomId: string | undefined
+  if (typeof args.classId === 'string' && args.classId) {
+    const c = await ownClass(schoolId, args.classId)
+    if (!c) return errorResult('کلاس موردنظر در مدرسه شما یافت نشد')
+    classroomId = c.id
+    refs.push({ kind: 'class', id: c.id, title: c.name })
+  }
+  const limitRaw = Number(args.limit ?? 10)
+  const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 10, 1), 25)
+
+  const grades = await db.studentGrade.findMany({
+    where: {
+      classroom: classroomId ? { id: classroomId } : { schoolId },
+      OR: [{ session: { status: 'FINALIZED' } }, { sessionId: null }],
+    },
+    include: {
+      student: { select: { id: true, fullName: true } },
+      lesson: { select: { id: true, name: true } },
+      classroom: { select: { id: true, name: true } },
+    },
+    orderBy: [{ dateKey: 'desc' }, { createdAt: 'desc' }],
+    take: 500,
+  })
+
+  const numeric = grades.map((g) => ({ g, n: scoreToNumber(g.score) }))
+  const withNum = numeric.filter((x) => x.n !== null) as { g: (typeof grades)[number]; n: number }[]
+
+  // میانگین درس‌به‌درس
+  const lessonMap = new Map<string, { name: string; id: string | null; nums: number[] }>()
+  for (const x of withNum) {
+    const key = x.g.lesson?.id ?? ''
+    const cur = lessonMap.get(key) ?? { name: x.g.lesson?.name ?? 'بدون درس', id: x.g.lesson?.id ?? null, nums: [] }
+    cur.nums.push(x.n)
+    lessonMap.set(key, cur)
+  }
+  // میانگین کلاس‌به‌کلاس
+  const classMap = new Map<string, { name: string; id: string; nums: number[] }>()
+  for (const x of withNum) {
+    const cur = classMap.get(x.g.classroom.id) ?? { name: x.g.classroom.name, id: x.g.classroom.id, nums: [] }
+    cur.nums.push(x.n)
+    classMap.set(x.g.classroom.id, cur)
+  }
+
+  for (const c of classMap.values()) refs.push({ kind: 'class', id: c.id, title: c.name })
+
+  const recent = numeric.slice(0, limit)
+  for (const r of recent) refs.push({ kind: 'student', id: r.g.student.id, title: r.g.student.fullName })
+
+  return {
+    result: JSON.stringify({
+      totalGrades: grades.length,
+      numericGrades: withNum.length,
+      averageAll: avgOf(withNum.map((x) => x.n)),
+      perLesson: [...lessonMap.values()].map((l) => ({
+        lesson: l.name,
+        count: l.nums.length,
+        avg: avgOf(l.nums),
+      })),
+      perClass: [...classMap.values()].map((c) => ({
+        class: c.name,
+        count: c.nums.length,
+        avg: avgOf(c.nums),
+      })),
+      recentGrades: recent.map((r) => ({
+        student: r.g.student.fullName,
+        lesson: r.g.lesson?.name ?? 'بدون درس',
+        title: r.g.title,
+        score: r.g.score,
+        dateKey: r.g.dateKey,
+        dateFa: formatJalaliDate(r.g.dateKey),
+      })),
     }),
     refs: dedupeRefs(refs),
   }
@@ -1359,6 +1889,14 @@ export async function executeAiTool(
       return toolTeacherDetail(ctx.schoolId, argsJson)
     case 'list_sample_questions':
       return toolListSampleQuestions(ctx.schoolId, argsJson)
+    case 'student_performance':
+      return toolStudentPerformance(ctx.schoolId, argsJson)
+    case 'day_agenda':
+      return toolDayAgenda(ctx.schoolId, argsJson)
+    case 'live_sessions':
+      return toolLiveSessions(ctx.schoolId, argsJson)
+    case 'grades_stats':
+      return toolGradesStats(ctx.schoolId, argsJson)
     case 'draft_announcement':
       return toolDraftAnnouncement(ctx.schoolId, argsJson)
     case 'calendar_stats':

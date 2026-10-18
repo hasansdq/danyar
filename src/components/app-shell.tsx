@@ -8,22 +8,25 @@ import {
   School,
   Settings,
   LogOut,
+  Menu,
   Video,
   CalendarDays,
+  ClipboardList,
   BookOpen,
-  UsersRound,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { NotificationBell } from '@/components/notifications/bell'
 import { PushRuntimeBridge } from '@/components/push/push-bridge'
 import { ClassStartPopup } from '@/components/live/class-start-popup'
+import { TeacherFab } from '@/components/teacher-fab'
 import { pushLogoutCleanup } from '@/lib/push-client'
 import { roleLabel } from '@/lib/format'
 import { useBranding } from '@/lib/use-branding'
 import { ShieldAlert } from 'lucide-react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { ReactNode } from 'react'
 
 interface NavItem {
@@ -53,10 +56,16 @@ export function AppShell({ user, children, hFixed, hideMobileNav, hideMobileHead
   const appName = branding?.appName ?? 'دانیار'
   const logoUrl = branding?.logoUrl ?? '/daniar-logo.svg'
   const displayName = branding?.schoolDisplayName ?? null
+  // نقش‌های مدیریت مدرسه (درخواست کاربر): سایدبار آن‌ها در موبایل به منوی همبرگری می‌رود
+  const isAdminRole = user.role === 'SCHOOL_ADMIN' || user.role === 'SCHOOL_VICE'
+  // منوی همبرگری موبایل — فقط برای مدیر/معاون مدرسه (سایدبار کامل در دراور راست)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   // تصویر پروفایل کاربر (در صورت وجود)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   // حالت جعل هویت مدیر کل
   const [impersonation, setImpersonation] = useState<{ byName: string } | null>(null)
+  // مجوزهای معاون (سوییچ‌های مدیر مدرسه) — نمایش منوی مدیریت بر اساس همین نقشه
+  const [vicePermissions, setVicePermissions] = useState<Record<string, boolean> | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -68,6 +77,7 @@ export function AppShell({ user, children, hFixed, hideMobileNav, hideMobileHead
         if (alive) {
           setAvatarUrl(d.user?.avatarUrl ?? null)
           setImpersonation(d.impersonation ?? null)
+          if (d.vicePermissions) setVicePermissions(d.vicePermissions)
         }
       } catch {
         /* ignore */
@@ -88,12 +98,24 @@ export function AppShell({ user, children, hFixed, hideMobileNav, hideMobileHead
     // «تکالیف» و «حضور و غیاب» از منوها حذف شدند — هر دو در «تقویم آموزشی» ادغام شدند:
     // تکلیف از ثبت رویداد نوع «تکلیف» در دیالوگ روز ثبت می‌شود و حضور و غیاب با
     // دکمه «ثبت غیبت» در همان دیالوگ؛ صفحات گزارش با لینک‌های درون تقویم در دسترس‌اند
+    //
+    // «گزارش کار» برای دانش‌آموز (درخواست کاربر — قبلاً «حضور غیاب و تخلفات»):
+    // فقط نام و آیکون بخش عوض شده؛ محتوا همان لیست غیبت‌ها و تخلفات
+    // ثبت‌شدهٔ خود دانش‌آموز + تاریخ و ثبت‌کننده است
+    {
+      href: '/attendance',
+      label: 'گزارش کار',
+      icon: ClipboardList,
+      show: user.role === 'STUDENT',
+    },
     {
       href: '/sample-questions',
       label: 'نمونه‌سؤالات',
       shortLabel: 'نمونه‌سؤال',
       icon: BookOpen,
-      show: user.role === 'TEACHER' || user.role === 'STUDENT' || user.role === 'SCHOOL_ADMIN',
+      // مدیر مدرسه و معاون: از سایدبار حذف شد — دکمهٔ «نمونه‌سؤالات» در بالای
+      // صفحهٔ مدیریت مدرسه (/modir) جای آن را گرفت (درخواست کاربر)
+      show: user.role === 'TEACHER' || user.role === 'STUDENT',
     },
     {
       href: '/calendar',
@@ -101,29 +123,30 @@ export function AppShell({ user, children, hFixed, hideMobileNav, hideMobileHead
       shortLabel: 'تقویم',
       icon: CalendarDays,
       show:
-        user.role === 'TEACHER' || user.role === 'STUDENT' || user.role === 'SCHOOL_ADMIN',
+        user.role === 'TEACHER' || user.role === 'STUDENT' || user.role === 'SCHOOL_ADMIN' || user.role === 'SCHOOL_VICE',
     },
     {
       href: '/live',
       label: 'کلاس آنلاین',
       icon: Video,
-      show: user.role === 'TEACHER' || user.role === 'STUDENT' || user.role === 'SCHOOL_ADMIN',
+      show:
+        user.role === 'TEACHER' ||
+        user.role === 'STUDENT' ||
+        user.role === 'SCHOOL_ADMIN' ||
+        // معاون: ورود به استریم قابل محدودیت است (سوییچ مدیر مدرسه)
+        (user.role === 'SCHOOL_VICE' && (vicePermissions?.live ?? true)),
     },
-    // داشبورد حذف شد: دانش‌آموز/معلم به گفتگوها رسیدگی می‌کنند؛ آمار مدیر مدرسه در «مدیریت مدرسه» ادغام شد
+    // هاب «مدیریت مدرسه» — باکس‌های آماری هشتگانه در صفحهٔ مستقل خودشان؛
+    // هر بخش (گروه‌ها، کاربران، اطلاعیه‌ها…) از داخل همان باکس‌ها در دسترس است
     {
-      href: '/modir/classes',
+      href: '/modir',
       label: 'مدیریت مدرسه',
       icon: School,
-      show: user.role === 'SCHOOL_ADMIN',
+      show: user.role === 'SCHOOL_ADMIN' || user.role === 'SCHOOL_VICE',
     },
-    // مدیریت گروه‌ها — بخش مجزا در سایدبار (درخواست کاربر)
-    {
-      href: '/modir/groups',
-      label: 'مدیریت گروه‌ها',
-      shortLabel: 'گروه‌ها',
-      icon: UsersRound,
-      show: user.role === 'SCHOOL_ADMIN',
-    },
+    // «مدیریت گروه‌ها» از سایدبار حذف شد (درخواست کاربر) — باکس گروه‌های درسی
+    // در هاب مدیریت مدرسه (+ → افزودن گروه، تنظیمات → فهرست و مدیریت) همان کار را می‌کند
+    //
     // تنظیمات از منوها حذف شد — با آیکون چرخ‌دنده در هدر در دسترس است
   ].filter((item) => item.show)
 
@@ -145,6 +168,10 @@ export function AppShell({ user, children, hFixed, hideMobileNav, hideMobileHead
 
       {/* پاپ‌آپ «کلاس شما شروع شد!» — دانش‌آموزان، روی هر صفحه‌ای (صف چند جلسه، ضدتکرار) */}
       <ClassStartPopup role={user.role} />
+
+      {/* دکمه شناور «+» معلم (درخواست کاربر) — فقط در صفحهٔ گفتگوها نمایان است:
+          ثبت غیبت/نمره/تخلف امروز + یادآوری پس از ورود (ورود معلم به همین صفحه می‌رسد) */}
+      {user.role === 'TEACHER' && pathname === '/' && <TeacherFab />}
 
       {/* نوار جعل هویت — هشدار دائمی بالای برنامه */}
       {impersonation && (
@@ -234,9 +261,22 @@ export function AppShell({ user, children, hFixed, hideMobileNav, hideMobileHead
       </aside>
 
       <div className={cn('flex-1 flex flex-col', hFixed ? 'min-h-0' : 'min-h-screen lg:min-h-0')}>
-        {/* هدر موبایل */}
+        {/* هدر موبایل — مدیر/معاون: دکمهٔ همبرگری (درخواست کاربر) */}
         {!hideMobileHeader && (
           <header className="lg:hidden sticky top-0 z-40 flex items-center gap-2 border-b bg-card/95 backdrop-blur px-4 py-2.5">
+            {isAdminRole && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setMobileNavOpen(true)}
+                aria-label="باز کردن منو"
+                title="منوی پنل"
+                aria-expanded={mobileNavOpen}
+                data-testid="mobile-nav-trigger"
+              >
+                <Menu className="h-5 w-5" />
+              </Button>
+            )}
             <img src={logoUrl} alt={appName} className="h-8 w-8 object-contain" />
             <span className="font-bold">{appName}</span>
             <div className="flex-1" />
@@ -290,13 +330,14 @@ export function AppShell({ user, children, hFixed, hideMobileNav, hideMobileHead
           <ThemeToggle />
         </header>
 
-        <main className={cn('flex-1', hFixed ? 'flex flex-col min-h-0' : '', hideMobileNav ? '' : 'pb-20 lg:pb-0')}>
+        <main className={cn('flex-1', hFixed ? 'flex flex-col min-h-0' : '', hideMobileNav || isAdminRole ? '' : 'pb-20 lg:pb-0')}>
           {children}
         </main>
       </div>
 
-      {/* ناوبری پایین موبایل — داخل گفتگوها نمایش داده نمی‌شود */}
-      {!hideMobileNav && (
+      {/* ناوبری پایین موبایل — داخل گفتگوها و برای مدیر/معاون مدرسه نمایش داده نمی‌شود
+          (سایدبار این دو نقش در منوی همبرگری بالای صفحه قرار گرفته است — درخواست کاربر) */}
+      {!hideMobileNav && !isAdminRole && (
         <nav
           className="lg:hidden fixed bottom-0 inset-x-0 z-40 border-t bg-card/95 backdrop-blur flex"
           aria-label="ناوبری موبایل"
@@ -321,6 +362,88 @@ export function AppShell({ user, children, hFixed, hideMobileNav, hideMobileHead
           ))}
         </nav>
       )}
+
+      {/* ── منوی همبرگری موبایل (درخواست کاربر): سایدبار کامل مدیر/معاون مدرسه در دراور راست ── */}
+      <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <SheetContent
+          side="right"
+          className="w-72 p-0 flex flex-col"
+          dir="rtl"
+          data-testid="mobile-nav-drawer"
+        >
+          <SheetHeader className="p-4 border-b shrink-0 space-y-0.5">
+            <SheetTitle asChild>
+              <div className="flex items-center gap-2.5">
+                <img src={logoUrl} alt={appName} className="h-9 w-9 object-contain" />
+                <div className="min-w-0">
+                  <div className="font-bold text-lg leading-tight">{appName}</div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {displayName ?? 'پیام‌رسان آموزشی'}
+                  </div>
+                </div>
+              </div>
+            </SheetTitle>
+            <SheetDescription className="sr-only">منوی اصلی</SheetDescription>
+          </SheetHeader>
+
+          <nav
+            className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1"
+            aria-label="منوی اصلی (موبایل)"
+          >
+            {navItems.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setMobileNavOpen(false)}
+                aria-current={isActive(item.href) ? 'page' : undefined}
+                className={cn(
+                  'flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition-colors',
+                  isActive(item.href)
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                )}
+              >
+                <item.icon className="h-5 w-5" />
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+
+          <div className="p-3 border-t shrink-0">
+            <div className="flex items-center gap-3 px-2 py-2">
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt=""
+                  className="h-9 w-9 rounded-full object-cover border"
+                />
+              ) : (
+                <Avatar className="h-9 w-9">
+                  <AvatarFallback className="bg-primary/10 text-primary text-sm font-bold">
+                    {user.fullName.trim().charAt(0)}
+                  </AvatarFallback>
+                </Avatar>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium truncate">{user.fullName}</div>
+                <div className="text-xs text-muted-foreground">{roleLabel(user.role)}</div>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  setMobileNavOpen(false)
+                  void logout()
+                }}
+                aria-label="خروج از حساب"
+                title="خروج"
+              >
+                <LogOut className="h-4.5 w-4.5" />
+              </Button>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
     </>
   )

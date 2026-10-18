@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin, jsonError } from '@/lib/api-auth'
+import { requireSchoolManager, jsonError } from '@/lib/api-auth'
 import { hashPassword, validatePassword, verifyPassword } from '@/lib/password'
 import { normalizePhone } from '@/lib/phone'
 
@@ -14,7 +14,8 @@ type Params = { params: Promise<{ id: string }> }
  * شماره تلفن در کل پلتفرم یکتاست.
  */
 export async function PATCH(req: NextRequest, { params }: Params) {
-  const res = await requireSchoolAdmin()
+  // معاون: تغییر اطلاعات کاربران فقط با مجوز مربوطه (سوییچ مدیر مدرسه)
+  const res = await requireSchoolManager('edit_users')
   if ('response' in res) return res.response
   const { id } = await params
 
@@ -93,7 +94,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     }
   }
 
-  if (Object.keys(data).length === 0 && body?.classroomIds === undefined && body?.subjectGroupIds === undefined) {
+  if (Object.keys(data).length === 0 && body?.classroomIds === undefined && body?.subjectGroupIds === undefined && body?.lessonIds === undefined) {
     return jsonError('تغییری ارسال نشده است')
   }
 
@@ -210,6 +211,32 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       }
     }
 
+    // ─── تغییر درس‌های منتسب به معلم (درخواست کاربر — جایگزینی انتساب‌ها) ───
+    if (Array.isArray(body?.lessonIds)) {
+      if (user.role !== 'TEACHER' && user.role !== 'SCHOOL_VICE') {
+        return jsonError('انتساب درس فقط برای معلم امکان‌پذیر است')
+      }
+      const rawLessonIds: unknown[] = body.lessonIds
+      const lessonIdList = [...new Set(rawLessonIds.map((v) => String(v)).filter(Boolean))]
+      const validLessons = await db.lesson.findMany({
+        where: { id: { in: lessonIdList }, schoolId: res.session.schoolId },
+        select: { id: true },
+      })
+      if (validLessons.length !== lessonIdList.length) {
+        return jsonError('یکی از درس‌های انتخابی در این مدرسه یافت نشد')
+      }
+      await db.$transaction([
+        db.teacherLesson.deleteMany({ where: { teacherId: id } }),
+        ...lessonIdList.map((lessonId) =>
+          db.teacherLesson.upsert({
+            where: { teacherId_lessonId: { teacherId: id, lessonId } },
+            create: { teacherId: id, lessonId },
+            update: {},
+          }),
+        ),
+      ])
+    }
+
     return NextResponse.json({ user: updated })
   } catch (e) {
     const err = e as { code?: string }
@@ -222,7 +249,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
 /** حذف امن کاربر — بدون confirm فقط آمار وابستگی‌ها را برمی‌گرداند (409) */
 export async function DELETE(req: NextRequest, { params }: Params) {
-  const res = await requireSchoolAdmin()
+  // معاون: حذف کاربران فقط با مجوز مربوطه (سوییچ مدیر مدرسه)
+  const res = await requireSchoolManager('delete_users')
   if ('response' in res) return res.response
   const { id } = await params
 

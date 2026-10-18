@@ -17,6 +17,7 @@ import {
 import { cn } from '@/lib/utils'
 import { chatTime, faNum } from '@/lib/format'
 import { GRADE_OPTIONS } from '@/lib/school'
+import { apiFetch } from '@/lib/client-api'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -37,6 +38,7 @@ import {
 } from '@/components/ui/dialog'
 import { getSocket } from './socket-client'
 import { ConnectionBadge } from './connection-badge'
+import { navigateAfterDialogClose } from '@/lib/dialog-history'
 import type { Conversation, ChatMessage, DmCandidate } from './types'
 
 interface SearchResults {
@@ -82,7 +84,9 @@ export function MessengerList({ currentKey }: { currentKey?: string }) {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/chats', { cache: 'no-store' })
+      // apiFetch: 401 (نشست باطل/زامبی) → هداشت خودکار به ورود؛ در غیر این صورت
+      // خطا بی‌صدا می‌ماند و «در حال بارگذاری» بی‌پایان می‌شود
+      const res = await apiFetch('/api/chats', { cache: 'no-store' })
       if (res.ok) {
         const data = await res.json()
         setConversations(data.conversations ?? [])
@@ -205,7 +209,8 @@ export function MessengerList({ currentKey }: { currentKey?: string }) {
         return
       }
       setNewChatOpen(false)
-      router.push(`/chats/group/${data.group.id}`)
+      // ناوبری پس از پاک‌سازی history دیالوگ — بدون race با back پاک‌ساز
+      navigateAfterDialogClose(() => router.push(`/chats/group/${data.group.id}`))
     } finally {
       setSgCreating(false)
     }
@@ -216,6 +221,12 @@ export function MessengerList({ currentKey }: { currentKey?: string }) {
     if (kind === 'assistant') {
       router.push('/assistant')
       return
+    }
+    // نشان ورود از فهرست گفتگوها — دکمهٔ back چت با back طبیعی برمی‌گردد (بدون ورودی اضافه)
+    try {
+      sessionStorage.setItem('daniar-chat-entry', 'list')
+    } catch {
+      /* private mode */
     }
     router.push(kind === 'group' ? `/chats/group/${id}` : `/chats/dm/${id}`)
   }
@@ -500,7 +511,7 @@ export function MessengerList({ currentKey }: { currentKey?: string }) {
                           type="button"
                           onClick={() => {
                             setNewChatOpen(false)
-                            router.push(`/chats/group/${g.id}`)
+                            navigateAfterDialogClose(() => router.push(`/chats/group/${g.id}`))
                           }}
                           className="w-full text-right px-2.5 py-2 hover:bg-accent transition-colors flex items-center gap-2"
                         >
@@ -543,7 +554,7 @@ export function MessengerList({ currentKey }: { currentKey?: string }) {
                     <button
                       onClick={() => {
                         setNewChatOpen(false)
-                        router.push(`/chats/dm/${c.id}`)
+                        navigateAfterDialogClose(() => router.push(`/chats/dm/${c.id}`))
                       }}
                       className="w-full text-right flex items-center gap-3 px-2 py-2.5 hover:bg-accent rounded-lg transition-colors"
                     >

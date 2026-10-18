@@ -2,6 +2,7 @@ import { db } from '@/lib/db'
 import type { SessionPayload } from '@/lib/session'
 import { parseDateKey } from '@/lib/jalali'
 import { teacherAssignedToClassroom } from '@/lib/live-access'
+import { viceHasPermission } from '@/lib/vice-permissions'
 
 /**
  * موتور تقویم آموزشی کلاسی — همه بررسی‌های دسترسی سمت سرور انجام می‌شود.
@@ -118,13 +119,17 @@ export async function canViewClassCalendar(
   return false
 }
 
-/** آیا کاربر می‌تواند برای این کلاس رویداد ثبت کند؟ (فقط معلم منتسب یا مدیر همان مدرسه) */
+/** آیا کاربر می‌تواند برای این کلاس رویداد ثبت کند؟ (فقط معلم منتسب یا مدیر/معاون همان مدرسه — معاون با مجوز ثبت رویداد) */
 export async function canCreateClassEvent(
   session: SessionPayload,
   classroom: { id: string; schoolId: string },
 ): Promise<boolean> {
   if (!session.schoolId || session.schoolId !== classroom.schoolId) return false
-  if (session.role === 'SCHOOL_ADMIN' || session.role === 'SCHOOL_VICE') return true
+  if (session.role === 'SCHOOL_ADMIN') return true
+  if (session.role === 'SCHOOL_VICE') {
+    // معاون: ثبت رویداد تقویم قابل محدودیت از طرف مدیر مدرسه است
+    return viceHasPermission(session, 'calendar_events')
+  }
   if (session.role === 'TEACHER') return teacherAssignedToClassroom(session.uid, classroom.id)
   return false
 }

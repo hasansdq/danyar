@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { MessageCircle, Users, Plus, Loader2, Inbox } from 'lucide-react'
+import { navigateAfterDialogClose } from '@/lib/dialog-history'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -140,7 +141,7 @@ export function ChatList() {
                     className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-right hover:bg-accent transition-colors"
                     onClick={() => {
                       setDialogOpen(false)
-                      router.push(`/chats/dm/${u.id}`)
+                      navigateAfterDialogClose(() => router.push(`/chats/dm/${u.id}`))
                     }}
                   >
                     <Avatar className="h-9 w-9">

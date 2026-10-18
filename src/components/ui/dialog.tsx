@@ -5,11 +5,38 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { XIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { useDialogHistory } from "@/lib/dialog-history"
 
 function Dialog({
+  open: openProp,
+  onOpenChange,
+  defaultOpen,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+  // دکمهٔ back موبایل پنجرهٔ باز را می‌بندد (درخواست کاربر) — ورودی history
+  // هم‌گام با وضعیت باز/بسته نگه داشته می‌شود
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false)
+  const isControlled = openProp !== undefined
+  const open = isControlled ? openProp : uncontrolledOpen
+
+  const handleOpenChange = React.useCallback(
+    (next: boolean) => {
+      if (!isControlled) setUncontrolledOpen(next)
+      onOpenChange?.(next)
+    },
+    [isControlled, onOpenChange],
+  )
+
+  useDialogHistory(Boolean(open), handleOpenChange)
+
+  return (
+    <DialogPrimitive.Root
+      data-slot="dialog"
+      open={open}
+      onOpenChange={handleOpenChange}
+      {...props}
+    />
+  )
 }
 
 function DialogTrigger({

@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { requireAppRole, jsonError } from '@/lib/api-auth'
 import { getAccessibleGroup, type GroupWithContext } from '@/lib/chat-access'
 import { notifySocket } from '@/lib/notify'
+import { viceHasPermission } from '@/lib/vice-permissions'
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -15,13 +16,14 @@ type ManagerSession = { uid: string; role: string; schoolId: string }
 /**
  * دسترسی مدیریت گروه:
  * - مدیر مدرسه: گروه‌های مدرسه خودش
+ * - معاون: مانند مدیر — فقط با مجوز مدیریت گروه‌ها (سوییچ مدیر مدرسه)
  * - معلم: فقط گروه‌هایی که واقعاً به او منتسب شده‌اند
  */
 function getManageableGroup(
   groupId: string,
   session: ManagerSession,
 ): Promise<GroupWithContext | null> {
-  if (session.role !== 'SCHOOL_ADMIN' && session.role !== 'TEACHER') {
+  if (session.role !== 'SCHOOL_ADMIN' && session.role !== 'TEACHER' && session.role !== 'SCHOOL_VICE') {
     return Promise.resolve(null)
   }
   return getAccessibleGroup(
@@ -37,10 +39,15 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const session = res.session
   const { id } = await params
 
+  // معاون: مانند مدیر مدرسه — فقط با مجوز مدیریت گروه‌ها (سوییچ مدیر)
+  if (session.role === 'SCHOOL_VICE' && !(await viceHasPermission(session, 'groups'))) {
+    return jsonError('این دسترسی برای شما توسط مدیر مدرسه محدود شده است', 403)
+  }
+
   const group = await getManageableGroup(id, session)
   if (!group) return jsonError('گروه یافت نشد یا اجازه ویرایش ندارید', 404)
-  // گروه‌های عمومی مدرسه فقط توسط مدیر مدرسه قابل ویرایش‌اند
-  if (group.scope !== 'CLASS' && session.role !== 'SCHOOL_ADMIN') {
+  // گروه‌های عمومی مدرسه فقط توسط مدیر/معاون مدرسه قابل ویرایش‌اند
+  if (group.scope !== 'CLASS' && session.role !== 'SCHOOL_ADMIN' && session.role !== 'SCHOOL_VICE') {
     return jsonError('ویرایش گروه‌های عمومی مدرسه فقط برای مدیر مدرسه مجاز است', 403)
   }
 
@@ -86,23 +93,37 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       return jsonError('تغییر به این سیاست فقط برای مدیر مدرسه مجاز است', 403)
     }
     data.messagePolicy = policy
+    // هماهنگی دو روش قفل (درخواست کاربر): سیاست STAFF/ADMINS یعنی گروه برای
+    // دانش‌آموزان قفل است — پرچم lockedForStudents هم‌زمان هم‌خوان می‌شود تا
+    // هر دو روش (هدر گروه و فهرست گروه‌های پنل مدیریت) وضعیت یکسانی ببینند
+    data.lockedForStudents = policy === 'STAFF' || policy === 'ADMINS'
   }
 
   if (body.archived !== undefined) {
     // بایگانی/خروج از بایگانی فقط از پنل مدیریت مدرسه — معلم اجازه ندارد
-    if (session.role !== 'SCHOOL_ADMIN') {
+    if (session.role !== 'SCHOOL_ADMIN' && session.role !== 'SCHOOL_VICE') {
       return jsonError('بایگانی گروه فقط برای مدیر مدرسه مجاز است', 403)
     }
     data.archivedAt = body.archived === true ? new Date() : null
   }
 
   if (body.lockedForStudents !== undefined) {
-    // قفل/بازکردن قفل گروه برای دانش‌آموزان — فقط مدیر مدرسه؛ گروه مخفی/حذف نمی‌شود و
+    // قفل/بازکردن قفل گروه برای دانش‌آموزان — فقط مدیر/معاون مدرسه؛ گروه مخفی/حذف نمی‌شود و
     // فقط ارسال پیام/فایل دانش‌آموز بسته می‌شود (مشاهده و بقیه اعضا عادی)
-    if (session.role !== 'SCHOOL_ADMIN') {
+    if (session.role !== 'SCHOOL_ADMIN' && session.role !== 'SCHOOL_VICE') {
       return jsonError('قفل گروه فقط برای مدیر مدرسه مجاز است', 403)
     }
-    data.lockedForStudents = body.lockedForStudents === true
+    const lock = body.lockedForStudents === true
+    data.lockedForStudents = lock
+    // هماهنگی دو روش قفل (درخواست کاربر): قفل از پنل مدیریت، سیاست ارسال را هم
+    // هم‌زمان تغییر می‌دهد تا هدر گروه و تنظیمات گروه همان وضعیت را نشان دهند.
+    // سیاست ADMINS (سخت‌گیرتر) هنگام قفل حفظ می‌شود؛ باز کردن قفل → همه اعضا
+    const currentPolicy = data.messagePolicy ?? group.messagePolicy
+    data.messagePolicy = lock
+      ? currentPolicy === 'ADMINS'
+        ? 'ADMINS'
+        : 'STAFF'
+      : 'ALL'
   }
 
   // تصویر پروفایل گروه — آپلود باید از قبل انجام شده باشد
@@ -157,7 +178,11 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const res = await requireAppRole()
   if ('response' in res) return res.response
   const session = res.session
-  if (session.role !== 'SCHOOL_ADMIN') {
+  // معاون: مانند مدیر — فقط با مجوز مدیریت گروه‌ها (سوییچ مدیر)
+  if (session.role === 'SCHOOL_VICE' && !(await viceHasPermission(session, 'groups'))) {
+    return jsonError('این دسترسی برای شما توسط مدیر مدرسه محدود شده است', 403)
+  }
+  if (session.role !== 'SCHOOL_ADMIN' && session.role !== 'SCHOOL_VICE') {
     return jsonError('حذف گروه فقط برای مدیر مدرسه مجاز است', 403)
   }
   const { id } = await params

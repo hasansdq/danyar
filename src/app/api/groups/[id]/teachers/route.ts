@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin, jsonError } from '@/lib/api-auth'
+import { requireSchoolManager, jsonError } from '@/lib/api-auth'
 
 type Params = { params: Promise<{ id: string }> }
 
 /** انتساب معلم به گروه درسی */
 export async function POST(req: NextRequest, { params }: Params) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('groups')
   if ('response' in res) return res.response
   const { id } = await params
 
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
 /** لغو انتساب معلم از گروه درسی */
 export async function DELETE(req: NextRequest, { params }: Params) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('groups')
   if ('response' in res) return res.response
   const { id } = await params
 

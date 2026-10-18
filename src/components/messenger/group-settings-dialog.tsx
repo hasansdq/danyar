@@ -21,10 +21,11 @@ interface GroupSettingsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   meta: ConversationMeta | null
-  /** تغییرات روی گفتگوی باز اعمال شود (نام/سیاست/تصویر) */
+  /** تغییرات روی گفتگوی باز اعمال شود (نام/سیاست/قفل/تصویر) */
   onUpdated: (patch: {
     name?: string
     policy?: string
+    lockedForStudents?: boolean
     avatarUrl?: string | null
   }) => void
 }
@@ -53,7 +54,13 @@ export function GroupSettingsDialog({
   useEffect(() => {
     if (!open || !meta) return
     setName(meta.title)
-    setLocked(policy === 'STAFF' || policy === 'ADMINS')
+    // وضعیت قفل هم‌خوان با پنل مدیریت (درخواست کاربر):
+    // policy STAFF/ADMINS یا پرچم lockedForStudents — هر یک قفل یعنی قفل
+    setLocked(
+      meta.lockedForStudents === true ||
+        meta.policy === 'STAFF' ||
+        meta.policy === 'ADMINS',
+    )
     setAvatarUrl(meta.avatarUrl ?? null)
   }, [open, meta, policy])
 
@@ -96,7 +103,9 @@ export function GroupSettingsDialog({
           ? 'گروه برای دانش‌آموزان قفل شد — فقط معلم و مدیر می‌توانند پیام بفرستند'
           : 'قفل گروه برداشته شد — همه اعضا می‌توانند پیام بفرستند',
       )
-      onUpdated({ policy: next ? 'STAFF' : 'ALL' })
+      // سرور policy و lockedForStudents را هم‌زمان هم‌خوان می‌کند (هماهنگی
+      // با پنل مدیریت) — وضعیت محلی هم هر دو فیلد را به‌روز می‌کند
+      onUpdated({ policy: next ? 'STAFF' : 'ALL', lockedForStudents: next })
     } else {
       setLocked(!next)
     }
@@ -255,6 +264,9 @@ export function GroupSettingsDialog({
                   : locked
                     ? 'فعال — دانش‌آموزان فقط می‌خوانند؛ معلمان و مدیر می‌توانند پیام بفرستند'
                     : 'غیرفعال — همه اعضا می‌توانند در گروه پیام بفرستند'}
+              </p>
+              <p className="text-[10.5px] text-muted-foreground/80">
+                هم‌خوان با قفل گروه در پنل «مدیریت گروه‌ها» — تغییر از هر یک از دو روش در هر دو قسمت اعمال می‌شود.
               </p>
             </div>
             <Switch

@@ -222,8 +222,23 @@ function chatClock(iso: string) {
 function RemoteAudio({ stream }: { stream: MediaStream | null }) {
   const ref = useRef<HTMLAudioElement>(null)
   useEffect(() => {
-    if (ref.current && ref.current.srcObject !== stream) {
-      ref.current.srcObject = stream
+    const el = ref.current
+    if (!el) return
+    if (el.srcObject !== stream) el.srcObject = stream
+    if (!stream) return
+    // پخش خودکار صدا ممکن است توسط سیاست autoplay مرورگر بلاک شود —
+    // با اولین تعامل کاربر با صفحه (کلیک) دوباره تلاش می‌شود
+    const retry = () => {
+      document.removeEventListener('pointerdown', retry)
+      el.play().catch(() => null)
+    }
+    let blocked = false
+    el.play().catch(() => {
+      blocked = true
+      document.addEventListener('pointerdown', retry)
+    })
+    return () => {
+      if (blocked) document.removeEventListener('pointerdown', retry)
     }
   }, [stream])
   return <audio ref={ref} autoPlay playsInline className="hidden" />
@@ -262,9 +277,17 @@ function VideoTile({
     useFullscreenElement<HTMLDivElement>(streamKind === 'screen')
   const portrait = usePortrait()
   useEffect(() => {
-    if (ref.current && ref.current.srcObject !== stream) {
-      ref.current.srcObject = stream
-    }
+    const el = ref.current
+    if (!el) return
+    if (el.srcObject !== stream) el.srcObject = stream
+    if (!stream) return
+    // پخش واقعی ویدیوی ریموت: autoplay صرفاً با attribute در همه مرورگرها تضمینی نیست —
+    // play() صریح؛ اگر سیاست مرورگر بلاک کرد، المان muted می‌شود و دوباره تلاش می‌شود
+    // (صدا از المان جداگانهٔ RemoteAudio پخش می‌شود، پس mute‌کردن ویدیو صدا را از دست نمی‌دهد)
+    el.play().catch(() => {
+      el.muted = true
+      el.play().catch(() => null)
+    })
   }, [stream])
 
   const rotateLandscape = fsActive && streamKind === 'screen' && portrait

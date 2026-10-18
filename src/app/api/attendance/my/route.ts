@@ -60,13 +60,75 @@ export async function GET(req: NextRequest) {
     status: r.status,
     note: r.note,
     finalizedAt: r.session.finalizedAt,
+    // ثبت‌کنندهٔ جلسه (درخواست کاربر: دانش‌آموز لیست غیبت‌ها را با ثبت‌کننده ببیند)
+    creatorName: r.session.creator?.fullName ?? '—',
   }))
+
+  // تخلفات ثبت‌شدهٔ این دانش‌آموز (درخواست کاربر — نمایش در «حضور و غیاب من»)
+  const violations = await db.studentViolation.findMany({
+    where: {
+      studentId: session.uid,
+      classroom: { schoolId: session.schoolId },
+      ...((from || to)
+        ? { dateKey: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } }
+        : {}),
+    },
+    include: {
+      creator: { select: { fullName: true } },
+      classroom: { select: { name: true } },
+    },
+    orderBy: [{ dateKey: 'desc' }, { createdAt: 'desc' }],
+  })
+
+  // نمرات ثبت‌شدهٔ این دانش‌آموز (درخواست کاربر — تب «نمره‌ها» در گزارش کار):
+  // فقط نمرات جلسات نهایی‌شده + نمرات بدون جلسه (اگر جلسه حذف شده باشد)
+  const grades = await db.studentGrade.findMany({
+    where: {
+      studentId: session.uid,
+      classroom: { schoolId: session.schoolId },
+      OR: [{ session: { status: 'FINALIZED' } }, { sessionId: null }],
+      ...((from || to)
+        ? { dateKey: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } }
+        : {}),
+    },
+    include: {
+      creator: { select: { id: true, fullName: true } },
+      classroom: { select: { name: true } },
+      lesson: { select: { id: true, name: true } },
+    },
+    orderBy: [{ dateKey: 'desc' }, { createdAt: 'desc' }],
+  })
 
   const present = records.filter((r) => r.status === 'PRESENT').length
   const absent = records.filter((r) => r.status === 'ABSENT').length
 
   return NextResponse.json({
     records: rows,
-    stats: { total: records.length, present, absent },
+    violations: violations.map((v) => ({
+      id: v.id,
+      dateKey: v.dateKey,
+      classroomName: v.classroom.name,
+      text: v.text,
+      creatorName: v.creator?.fullName ?? '—',
+      createdAt: v.createdAt,
+    })),
+    // نمرات — عنوان نمره، خود نمره، معلم (ثبت‌کننده)، درس و تاریخ (درخواست کاربر)
+    grades: grades.map((g) => ({
+      id: g.id,
+      dateKey: g.dateKey,
+      classroomName: g.classroom.name,
+      title: g.title,
+      lessonName: g.lesson?.name ?? null,
+      score: g.score,
+      teacherName: g.creator?.fullName ?? '—',
+      createdAt: g.createdAt,
+    })),
+    stats: {
+      total: records.length,
+      present,
+      absent,
+      violations: violations.length,
+      grades: grades.length,
+    },
   })
 }

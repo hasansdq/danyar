@@ -13,6 +13,6 @@ export default async function DashboardPage() {
   const session = await getSession()
   if (!session) redirect('/login')
   if (session.role === 'SUPER_ADMIN') redirect('/admin')
-  if (session.role === 'SCHOOL_ADMIN') redirect('/modir/classes')
+  if (session.role === 'SCHOOL_ADMIN' || session.role === 'SCHOOL_VICE') redirect('/modir')
   redirect('/')
 }

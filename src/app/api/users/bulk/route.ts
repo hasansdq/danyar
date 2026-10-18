@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin, jsonError } from '@/lib/api-auth'
+import { requireSchoolManager, jsonError } from '@/lib/api-auth'
 import {
   validateUserRows,
   commitValidRows,
@@ -14,7 +14,8 @@ import {
  * ردیف‌های خطادار رد می‌شوند و بقیه ثبت می‌شوند (نتیجه per-row برگردانده می‌شود).
  */
 export async function POST(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  // معاون: ثبت‌نام گروهی دانش‌آموز فقط با مجوز مربوطه (سوییچ مدیر مدرسه)
+  const res = await requireSchoolManager('register_students')
   if ('response' in res) return res.response
   const schoolId = res.session.schoolId
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin } from '@/lib/api-auth'
+import { requireSchoolManager } from '@/lib/api-auth'
 import { assertAiUsable, logAiUsage } from '@/lib/ai/access'
 import { generateAssistantResponse } from '@/lib/ai/generate'
 
@@ -10,7 +10,7 @@ import { generateAssistantResponse } from '@/lib/ai/generate'
  * سهمیه مصرف نمی‌شود چون پیام کاربر جدیدی ثبت نمی‌شود.
  */
 export async function POST(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('ai_assistant')
   if ('response' in res) return res.response
   const session = res.session
 

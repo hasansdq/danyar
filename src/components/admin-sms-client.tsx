@@ -63,11 +63,11 @@ const PROVIDER_FIELDS: Record<string, FieldDef[]> = {
     { key: 'baseUrl', label: 'آدرس پایه (اختیاری)', secret: false, placeholder: 'https://api.sms.ir/v1' },
   ],
   melipayamak: [
-    { key: 'username', label: 'نام کاربری پنل', secret: true },
-    { key: 'password', label: 'رمز پنل', secret: true },
-    { key: 'from', label: 'خط خدماتی (from)', secret: false, placeholder: '5000...' },
-    { key: 'textTemplate', label: 'متن پیام', secret: false, placeholder: 'کد ورود دانیار: {CODE}' },
-    { key: 'baseUrl', label: 'آدرس پایه (اختیاری)', secret: false, placeholder: 'https://rest.payamak-panel.com/api/SendOTP' },
+    { key: 'username', label: 'نام کاربری پنل ملی پیامک', secret: true },
+    { key: 'password', label: 'رمز عبور پنل', secret: true },
+    { key: 'from', label: 'شماره خط ارسال (from)', secret: false, placeholder: '5000... یا 3000... یا 021...', hint: 'شماره خطی که در پنل ملی پیامک به شما اختصاص داده شده است' },
+    { key: 'textTemplate', label: 'متن پیام', secret: false, placeholder: 'کد ورود دانیار: {CODE}', hint: 'برای پیامک انبوه، متن آزاد مستقیم ارسال می‌شود — وب‌سرویس رسمی: rest.payamak-panel.com/api/SendSMS/SendSMS' },
+    { key: 'baseUrl', label: 'آدرس پایه (اختیاری)', secret: false, placeholder: 'https://rest.payamak-panel.com/api/SendSMS' },
   ],
   farazsms: [
     { key: 'apiKey', label: 'کلید API (apikey)', secret: true },
@@ -112,6 +112,15 @@ function normalizeFaDigits(v: string): string {
     out += ch
   }
   return out
+}
+
+/** خط دوم نتیجه تست: وضعیت اتصال پنل که سرور جداگانه بررسی می‌کند */
+function connLine(conn: { ok: boolean; detail?: string; latencyMs?: number }): string {
+  const ms =
+    typeof conn.latencyMs === 'number'
+      ? ` (${new Intl.NumberFormat('fa-IR').format(conn.latencyMs)} میلی‌ثانیه)`
+      : ''
+  return ` — بررسی اتصال: ${conn.ok ? 'برقرار' : 'ناموفق'}${conn.detail ? ` — ${conn.detail}` : ''}${ms}`
 }
 
 export function AdminSmsClient() {
@@ -201,21 +210,24 @@ export function AdminSmsClient() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: normalizeFaDigits(testPhone) }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({ error: 'پاسخ نامعتبر از سرور' }))
       if (res.ok && data.ok) {
         setTestResult({
           ok: true,
-          text: `${data.message} — سرویس: ${PROVIDER_LABELS[data.provider] ?? data.provider} — ${new Intl.NumberFormat('fa-IR').format(data.latencyMs)} میلی‌ثانیه (${data.maskedPhone})`,
+          text: `${data.message ?? 'پیامک آزمایشی ارسال شد'} — سرویس: ${PROVIDER_LABELS[data.provider] ?? data.provider} — ${new Intl.NumberFormat('fa-IR').format(data.latencyMs)} میلی‌ثانیه (${data.maskedPhone})`,
         })
       } else {
+        const connInfo = data.connection
+          ? connLine(data.connection)
+          : ''
         setTestResult({
           ok: false,
-          text: `ارسال واقعاً ناموفق بود: ${data.error ?? 'خطای نامشخص'}`,
+          text: `ارسال واقعاً ناموفق بود: ${data.error ?? 'خطای نامشخص'}${connInfo}`,
         })
       }
       loadLogs()
     } catch {
-      setTestResult({ ok: false, text: 'خطا در برقراری ارتباط با سرور' })
+      setTestResult({ ok: false, text: 'خطا در برقراری ارتباط با سرور دانیار — اتصال خود را بررسی کنید' })
     } finally {
       setTesting(false)
     }

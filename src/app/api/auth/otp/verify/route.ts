@@ -5,6 +5,7 @@ import { normalizePhone } from '@/lib/phone'
 import { verifyOtp, phoneHmac } from '@/lib/otp'
 import { ensureSmsConfig } from '@/lib/sms/config'
 import { setSessionCookie, type Role } from '@/lib/session'
+import { verifyPassword, DEFAULT_USER_PASSWORD } from '@/lib/password'
 
 /**
  * POST /api/auth/otp/verify — بررسی کد یک‌بارمصرف و ورود.
@@ -71,17 +72,25 @@ export async function POST(req: NextRequest) {
     return jsonError('مدرسه شما غیرفعال است؛ با پشتیبانی تماس بگیرید', 403)
   }
 
+  // رمز کاربر هنوز پیش‌فرض (123456) است؟ — حتی با ورود پیامکی، تغییر رمز الزامی می‌شود (درخواست کاربر)
+  const usingDefaultPassword = await verifyPassword(
+    DEFAULT_USER_PASSWORD,
+    user.passwordHash,
+  )
+
   await setSessionCookie({
     uid: user.id,
     username: user.username,
     fullName: user.fullName,
     role: user.role as Role,
     schoolId: user.schoolId,
+    ...(usingDefaultPassword ? { pwdDefault: true } : {}),
   })
 
   return NextResponse.json({
     ok: true,
-    redirect: '/chats',
+    redirect: usingDefaultPassword ? '/settings?force=1' : '/chats',
+    mustChangePassword: usingDefaultPassword,
     user: { username: user.username, fullName: user.fullName, role: user.role },
   })
 }

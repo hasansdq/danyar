@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { navigateAfterDialogClose } from '@/lib/dialog-history'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -193,7 +194,8 @@ export function LiveClient({ role, fullName }: { role: string; fullName: string 
         toast.success('جلسه ساخته شد؛ پس از آماده‌شدن استریم، اعلان شروع کلاس ارسال می‌شود')
       }
       setDialogOpen(false)
-      router.push(`/live/${d.id}`)
+      // ناوبری پس از پاک‌سازی history دیالوگ — دکمه «شروع کلاس و ورود به اتاق» واقعاً وارد اتاق می‌شود
+      navigateAfterDialogClose(() => router.push(`/live/${d.id}`))
     } finally {
       setCreating(false)
     }
@@ -227,7 +229,7 @@ export function LiveClient({ role, fullName }: { role: string; fullName: string 
           <p className="text-xs text-muted-foreground">
             {role === 'TEACHER' && 'با سوییچ «شروع کلاس» جلسه هر کلاس مجاز خود را آغاز کنید — پس از ورود به اتاق و انتشار حداقل یک رسانه، سوییچ شروع کلاس فعال و اعلان برای دانش‌آموزان ارسال می‌شود'}
             {role === 'STUDENT' && 'جلسه فعال کلاس‌های خود را از همین‌جا وارد شوید'}
-            {role === 'SCHOOL_ADMIN' && 'جلسات فعال مدرسه شما — امکان ورود یا پایان‌دادن'}
+            {(role === 'SCHOOL_ADMIN' || role === 'SCHOOL_VICE') && 'جلسات فعال مدرسه شما — امکان ورود یا پایان‌دادن'}
           </p>
         </div>
       </div>

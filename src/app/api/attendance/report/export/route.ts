@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import * as XLSX from 'xlsx'
-import { jsonError, requireSchoolAdmin } from '@/lib/api-auth'
+import { jsonError, requireSchoolManager } from '@/lib/api-auth'
 import { attendanceEnabled } from '@/lib/attendance-access'
 import { buildAttendanceReport } from '@/lib/attendance-report'
 import { isValidDateKey, formatJalaliDate, todayDateKey } from '@/lib/jalali'
@@ -12,7 +12,7 @@ import { statusLabel } from '@/lib/attendance-access'
  * تاریخ‌ها جلالی؛ «ثبت‌نشده» جدا از غیبت.
  */
 export async function GET(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager('attendance')
   if ('response' in res) return res.response
   const session = res.session
 

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  Award,
+  BookMarked,
   CalendarCheck,
   CalendarDays,
   CheckCircle2,
@@ -63,7 +65,8 @@ const STATUS_CLASS: Record<string, string> = {
 
 export function AttendanceClient({ role, fullName }: { role: string; fullName: string }) {
   if (role === 'STUDENT') return <StudentAttendance fullName={fullName} />
-  if (role === 'SCHOOL_ADMIN') return <AdminAttendance fullName={fullName} />
+  // معاون همهٔ دسترسی‌های مدیر مدرسه را دارد (درخواست کاربر) — گزارش کامل مدرسه
+  if (role === 'SCHOOL_ADMIN' || role === 'SCHOOL_VICE') return <AdminAttendance fullName={fullName} />
   return <TeacherAttendance fullName={fullName} />
 }
 
@@ -414,6 +417,7 @@ function TeacherAttendance({ fullName }: { fullName: string }) {
                       <div className="pt-1">
                         <AttendanceSessionEditor
                           sessionId={openSessionId}
+                          role="TEACHER"
                           onSessionUpdated={() => loadSessions(month.jy, month.jm)}
                         />
                       </div>
@@ -446,6 +450,7 @@ function TeacherAttendance({ fullName }: { fullName: string }) {
               <CardContent className="pt-4">
                 <AttendanceSessionEditor
                   sessionId={openSessionId}
+                  role="TEACHER"
                   onSessionUpdated={() => loadSessions(month.jy, month.jm)}
                 />
               </CardContent>
@@ -518,13 +523,41 @@ interface MyRecord {
   status: string
   note: string | null
   finalizedAt: string | null
+  creatorName: string
+}
+
+/** تخلف ثبت‌شدهٔ دانش‌آموز (درخواست کاربر — نمایش در حضور و غیاب من) */
+interface MyViolation {
+  id: string
+  dateKey: string
+  classroomName: string
+  text: string
+  creatorName: string
+  createdAt: string
+}
+
+/** نمرهٔ ثبت‌شدهٔ دانش‌آموز (درخواست کاربر — تب «نمره‌ها» در گزارش کار) */
+interface MyGrade {
+  id: string
+  dateKey: string
+  classroomName: string
+  title: string
+  lessonName: string | null
+  score: string
+  teacherName: string
+  createdAt: string
 }
 
 function StudentAttendance({ fullName }: { fullName: string }) {
   const [records, setRecords] = useState<MyRecord[]>([])
-  const [stats, setStats] = useState({ total: 0, present: 0, absent: 0 })
+  const [violations, setViolations] = useState<MyViolation[]>([])
+  // نمرات ثبت‌شدهٔ دانش‌آموز (درخواست کاربر — تب «نمره‌ها»)
+  const [grades, setGrades] = useState<MyGrade[]>([])
+  const [stats, setStats] = useState({ total: 0, present: 0, absent: 0, violations: 0, grades: 0 })
   const [loading, setLoading] = useState(true)
   const [selectedDay, setSelectedDay] = useState<string | null>(null)
+  // تب گزارش کار دانش‌آموز (درخواست کاربر): نمره‌ها / غیبت‌ها / تخلفات
+  const [tab, setTab] = useState<'grades' | 'absents' | 'violations'>('grades')
 
   useEffect(() => {
     ;(async () => {
@@ -533,7 +566,11 @@ function StudentAttendance({ fullName }: { fullName: string }) {
         const d = await res.json()
         if (res.ok) {
           setRecords(d.records ?? [])
-          setStats(d.stats ?? { total: 0, present: 0, absent: 0 })
+          setViolations(d.violations ?? [])
+          setGrades(d.grades ?? [])
+          setStats(
+            d.stats ?? { total: 0, present: 0, absent: 0, violations: 0, grades: 0 },
+          )
         }
       } catch { /* ignore */ } finally {
         setLoading(false)
@@ -542,29 +579,54 @@ function StudentAttendance({ fullName }: { fullName: string }) {
   }, [])
 
   const dayInfo = useMemo(() => {
-    const info: Record<string, { dots: { color: 'green' | 'red'; count: number }[] }> = {}
+    const info: Record<string, { dots: { color: 'green' | 'red' | 'amber' | 'blue'; count: number }[] }> = {}
     for (const r of records) {
-      const cur = info[r.dateKey] ?? { dots: [{ color: 'green' as const, count: 0 }, { color: 'red' as const, count: 0 }] }
+      const cur = info[r.dateKey] ?? { dots: [{ color: 'green' as const, count: 0 }, { color: 'red' as const, count: 0 }, { color: 'amber' as const, count: 0 }, { color: 'blue' as const, count: 0 }] }
       if (r.status === 'PRESENT') cur.dots[0].count++
       else if (r.status === 'ABSENT') cur.dots[1].count++
       info[r.dateKey] = cur
     }
+    for (const v of violations) {
+      const cur = info[v.dateKey] ?? { dots: [{ color: 'green' as const, count: 0 }, { color: 'red' as const, count: 0 }, { color: 'amber' as const, count: 0 }, { color: 'blue' as const, count: 0 }] }
+      cur.dots[2].count++
+      info[v.dateKey] = cur
+    }
+    for (const g of grades) {
+      const cur = info[g.dateKey] ?? { dots: [{ color: 'green' as const, count: 0 }, { color: 'red' as const, count: 0 }, { color: 'amber' as const, count: 0 }, { color: 'blue' as const, count: 0 }] }
+      cur.dots[3].count++
+      info[g.dateKey] = cur
+    }
     return info
-  }, [records])
+  }, [records, violations, grades])
 
   const dayRecords = useMemo(
     () => (selectedDay ? records.filter((r) => r.dateKey === selectedDay) : []),
     [records, selectedDay],
   )
+  const dayViolations = useMemo(
+    () => (selectedDay ? violations.filter((v) => v.dateKey === selectedDay) : []),
+    [violations, selectedDay],
+  )
+  const dayGrades = useMemo(
+    () => (selectedDay ? grades.filter((g) => g.dateKey === selectedDay) : []),
+    [grades, selectedDay],
+  )
+
+  // رکوردهای غیبت‌ها (تب «غیبت‌ها» — فقط غایب‌ها)
+  const absentRecords = useMemo(
+    () => records.filter((r) => r.status === 'ABSENT'),
+    [records],
+  )
 
   return (
     <div className="max-w-6xl mx-auto p-4 lg:p-6 space-y-4">
       <div className="flex items-center gap-2.5">
-        <CalendarCheck className="h-6 w-6 text-primary" />
+        {/* نام بخش برای دانش‌آموز: «گزارش کار» (درخواست کاربر) — محتوای زیرین بدون تغییر */}
+        <ClipboardList className="h-6 w-6 text-primary" />
         <div>
-          <h1 className="text-lg font-bold leading-tight">حضور و غیاب من</h1>
+          <h1 className="text-lg font-bold leading-tight">گزارش کار من</h1>
           <p className="text-xs text-muted-foreground">
-            سوابق نهایی‌شده حضور شما — {fullName}
+            نمره‌ها، غیبت‌ها و تخلفات ثبت‌شدهٔ شما — {fullName}
           </p>
         </div>
       </div>
@@ -575,7 +637,15 @@ function StudentAttendance({ fullName }: { fullName: string }) {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-3 gap-3 max-w-lg">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 max-w-3xl">
+            <Card className="py-3">
+              <CardContent className="px-3 text-center">
+                <div className="text-xl font-bold text-sky-600 dark:text-sky-400">
+                  {faNum(stats.grades ?? grades.length)}
+                </div>
+                <div className="text-[11px] text-muted-foreground">نمرات ثبت‌شده</div>
+              </CardContent>
+            </Card>
             <Card className="py-3">
               <CardContent className="px-3 text-center">
                 <div className="text-xl font-bold">{faNum(stats.total)}</div>
@@ -598,6 +668,14 @@ function StudentAttendance({ fullName }: { fullName: string }) {
                 <div className="text-[11px] text-muted-foreground">غایب</div>
               </CardContent>
             </Card>
+            <Card className="py-3">
+              <CardContent className="px-3 text-center">
+                <div className="text-xl font-bold text-amber-600 dark:text-amber-400">
+                  {faNum(stats.violations ?? violations.length)}
+                </div>
+                <div className="text-[11px] text-muted-foreground">تخلفات ثبت‌شده</div>
+              </CardContent>
+            </Card>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[340px_1fr] items-start">
@@ -610,10 +688,43 @@ function StudentAttendance({ fullName }: { fullName: string }) {
                 <span className="flex items-center gap-1">
                   <span className="h-2 w-2 rounded-full bg-rose-500" /> غایب
                 </span>
+                <span className="flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-full bg-amber-500" /> تخلف
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-full bg-sky-500" /> نمره
+                </span>
               </div>
             </div>
 
             <div className="space-y-2">
+              {/* سه تب گزارش کار (درخواست کاربر): نمره‌ها / غیبت‌ها / تخلفات */}
+              <Tabs value={tab} onValueChange={(v) => setTab(v as 'grades' | 'absents' | 'violations')}>
+                <TabsList className="grid grid-cols-3 w-full" data-testid="report-tabs">
+                  <TabsTrigger value="grades" className="gap-1.5">
+                    <Award className="h-4 w-4" />
+                    نمره‌ها
+                    <Badge variant="secondary" className="text-[10px] px-1.5">
+                      {faNum(grades.length)}
+                    </Badge>
+                  </TabsTrigger>
+                  <TabsTrigger value="absents" className="gap-1.5">
+                    <XCircle className="h-4 w-4" />
+                    غیبت‌ها
+                    <Badge variant="secondary" className="text-[10px] px-1.5">
+                      {faNum(absentRecords.length)}
+                    </Badge>
+                  </TabsTrigger>
+                  <TabsTrigger value="violations" className="gap-1.5">
+                    <ClipboardList className="h-4 w-4" />
+                    تخلفات
+                    <Badge variant="secondary" className="text-[10px] px-1.5">
+                      {faNum(violations.length)}
+                    </Badge>
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+
               {selectedDay && (
                 <div className="rounded-xl border p-3 space-y-2">
                   <div className="text-sm font-bold">
@@ -626,12 +737,70 @@ function StudentAttendance({ fullName }: { fullName: string }) {
                       در این روز جلسه نهایی‌شده‌ای برای شما ثبت نشده است
                     </div>
                   )}
+                  {dayGrades.length > 0 && (
+                    <div className="space-y-1.5 pt-1">
+                      {dayGrades.map((g) => (
+                        <GradeRowItem key={g.id} g={g} />
+                      ))}
+                    </div>
+                  )}
+                  {dayViolations.length > 0 && (
+                    <div className="space-y-1.5 pt-1">
+                      {dayViolations.map((v) => (
+                        <ViolationRow key={v.id} v={v} />
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
-              {records.map((r) => (
-                <RecordRow key={r.sessionId} r={r} />
-              ))}
-              {!records.length && (
+
+              {/* ── تب «نمره‌ها» (درخواست کاربر — عنوان، نمره، معلم و تاریخ) ── */}
+              {tab === 'grades' &&
+                (grades.length === 0 ? (
+                  <div
+                    className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground"
+                    data-testid="grades-empty"
+                  >
+                    هنوز نمره‌ای برای شما ثبت نشده است. وقتی معلم در ثبت حضور و غیاب نمره
+                    ثبت کند، اینجا نمایش داده می‌شود.
+                  </div>
+                ) : (
+                  <div className="space-y-1.5" data-testid="student-grades-list">
+                    {grades.map((g) => (
+                      <GradeRowItem key={g.id} g={g} />
+                    ))}
+                  </div>
+                ))}
+
+              {/* ── تب «غیبت‌ها» ── */}
+              {tab === 'absents' &&
+                (absentRecords.length === 0 ? (
+                  <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+                    غیبتی برای شما ثبت نشده است.
+                  </div>
+                ) : (
+                  <div className="space-y-1.5" data-testid="student-absents-list">
+                    {absentRecords.map((r) => (
+                      <RecordRow key={r.sessionId} r={r} />
+                    ))}
+                  </div>
+                ))}
+
+              {/* ── تب «تخلفات» ── */}
+              {tab === 'violations' &&
+                (violations.length === 0 ? (
+                  <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+                    تخلفی برای شما ثبت نشده است.
+                  </div>
+                ) : (
+                  <div className="space-y-1.5" data-testid="student-violations-list">
+                    {violations.map((v) => (
+                      <ViolationRow key={v.id} v={v} />
+                    ))}
+                  </div>
+                ))}
+
+              {!records.length && !violations.length && !grades.length && (
                 <div className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
                   هنوز سابقه نهایی‌شده‌ای وجود ندارد. وقتی معلم حضور و غیاب را نهایی کند، اینجا
                   نمایش داده می‌شود.
@@ -641,6 +810,60 @@ function StudentAttendance({ fullName }: { fullName: string }) {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+/** ردیف نمرهٔ دانش‌آموز — تب «نمره‌ها» و جزئیات روز (عنوان، نمره، معلم و تاریخ) */
+function GradeRowItem({ g }: { g: MyGrade }) {
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/5 p-3"
+      data-testid="student-grade-row"
+    >
+      <span className="text-sm font-bold">{g.title}</span>
+      {g.lessonName ? (
+        <Badge variant="outline" className="gap-1">
+          <BookMarked className="h-3 w-3" />
+          {g.lessonName}
+        </Badge>
+      ) : null}
+      <Badge variant="outline">{g.classroomName}</Badge>
+      <Badge variant="outline" className="font-mono">
+        {formatJalaliDate(g.dateKey, { withWeekday: true })}
+      </Badge>
+      <Badge
+        variant="secondary"
+        className="bg-sky-500/15 text-sky-700 dark:text-sky-400 text-xs gap-1"
+      >
+        <Award className="h-3 w-3" />
+        نمره: {g.score}
+      </Badge>
+      <span className="w-full text-[10px] text-muted-foreground sm:w-auto" data-testid="grade-teacher">
+        معلم: {g.teacherName}
+      </span>
+    </div>
+  )
+}
+
+/** ردیف تخلف دانش‌آموز — در فهرست تخلفات و جزئیات روز */
+function ViolationRow({ v }: { v: MyViolation }) {
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3"
+      data-testid="student-violation-row"
+    >
+      <Badge variant="secondary" className="bg-amber-500/15 text-amber-600 dark:text-amber-400">
+        تخلف
+      </Badge>
+      <span className="text-sm font-medium text-amber-700 dark:text-amber-300">{v.text}</span>
+      <Badge variant="outline">{v.classroomName}</Badge>
+      <Badge variant="outline" className="font-mono">
+        {formatJalaliDate(v.dateKey, { withWeekday: true })}
+      </Badge>
+      <span className="w-full text-[10px] text-muted-foreground sm:w-auto">
+        ثبت‌کننده: {v.creatorName}
+      </span>
     </div>
   )
 }
@@ -662,6 +885,9 @@ function RecordRow({ r }: { r: MyRecord }) {
         {STATUS_FA[r.status]}
       </Badge>
       {r.note ? <span className="text-xs text-muted-foreground">یادداشت: {r.note}</span> : null}
+      <span className="w-full text-[10px] text-muted-foreground sm:w-auto" data-testid="record-creator">
+        ثبت‌کننده: {r.creatorName}
+      </span>
     </div>
   )
 }
@@ -1043,6 +1269,7 @@ function AdminAttendance({ fullName }: { fullName: string }) {
           {editingSession && (
             <AttendanceSessionEditor
               sessionId={editingSession}
+              role="SCHOOL_ADMIN"
               onSessionUpdated={() => load(query)}
             />
           )}

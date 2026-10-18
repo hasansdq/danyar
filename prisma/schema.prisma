@@ -58,6 +58,15 @@ model User {
   bulkSends              BulkSendLog[]            @relation("bulkSendLog")
   sampleqBookmarks       SampleQuestionBookmark[] @relation("sampleqBookmarker")
   classEventsCreated     ClassEvent[]             @relation("classEventCreator")
+  // تخلفات ثبت‌شده برای این کاربر (به‌عنوان دانش‌آموز) و توسط این کاربر (ثبت‌کننده)
+  violationsAsStudent    StudentViolation[]       @relation("violationStudent")
+  violationsAsCreator    StudentViolation[]       @relation("violationCreator")
+  // محدودیت‌های دسترسی‌ای که مدیر مدرسه برای این معاون تعیین کرده
+  vicePermissionOverrides VicePermission[]        @relation("vicePermissionVice")
+  // درس‌های منتسب به این کاربر (معلم) و نمرات داده‌شده/گرفته‌شده
+  teacherLessons        TeacherLesson[]           @relation("teacherLessonTeacher")
+  gradesGiven           StudentGrade[]            @relation("gradeCreator")
+  gradesReceived        StudentGrade[]            @relation("gradeStudent")
 }
 
 // فایل آپلودشده که هنوز به پیامی متصل نشده (مرحله میانی)
@@ -97,6 +106,8 @@ model School {
   sampleQuestions SampleQuestion[]
   classEvents     ClassEvent[]
   uploads         Upload[]
+  // درس‌های تعریف‌شدهٔ این مدرسه (ریاضی، علوم و…) — باکس «درس‌ها» پنل مدیریت
+  lessons         Lesson[]
   // گروه‌های عمومی مدرسه (همکاران/عمومی/پایه) — بدون کلاس مشخص
   publicGroups    SubjectGroup[]
   // سهمیه کل آپلود مدرسه بر حسب گیگابایت — 0 یعنی نامحدود
@@ -132,6 +143,9 @@ model Classroom {
   attendanceSessions AttendanceSession[]
   sampleQuestions    SampleQuestionClass[]
   classEvents        ClassEvent[]
+  violations         StudentViolation[]
+  // نمرات ثبت‌شده برای دانش‌آموزان این کلاس
+  grades             StudentGrade[]
 
   @@unique([schoolId, name])
 }
@@ -608,6 +622,10 @@ model AttendanceSession {
 
   records AttendanceRecord[]
   edits   AttendanceEditLog[]
+  // تخلفات ثبت‌شده از داخل ویرایشگر همین جلسه
+  violations StudentViolation[]
+  // نمرات ثبت‌شده از داخل ویرایشگر همین جلسه (ستون «نمره» معلم)
+  grades    StudentGrade[]
 
   @@unique([classroomId, dateKey, title])
   @@index([classroomId, dateKey])
@@ -645,6 +663,114 @@ model AttendanceEditLog {
   createdAt DateTime          @default(now())
 
   @@index([sessionId, studentId])
+}
+
+// ─── ثبت تخلفات (درخواست کاربر — ادغام در حضور و غیاب روز) ───
+// تخلف دانش‌آموز در تاریخ مشخص — ثبت توسط مدیر مدرسه/معاون/معلمِ همان کلاس.
+// dateKey کلید جلالی (۱۴۰۴-۰۷-۱۹) است تا با تقویم و جلسات حضور و غیاب هم‌راستا باشد.
+model StudentViolation {
+  id          String    @id @default(cuid())
+  studentId   String
+  student     User      @relation("violationStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  classroomId String
+  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  // کلید جلالی روز تخلف — مرتب‌سازی رشته‌ای صحیح
+  dateKey     String
+  // جلسه حضور و غیاب مرتبط (اگر از ویرایشگر جلسه ثبت شده باشد) — اختیاری
+  sessionId   String?
+  session     AttendanceSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  // متن تخلف (مثلاً «بی‌ادبی با معلم»)
+  text        String
+  creatorId   String
+  creator     User      @relation("violationCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([studentId, dateKey])
+  @@index([classroomId, dateKey])
+  @@index([sessionId])
+}
+
+// ─── درس‌های مدرسه (درخواست کاربر — باکس «درس‌ها» در پنل مدیریت مدرسه) ───
+// درس مدرسه‌محور است (مثل ریاضی، علوم، فارسی) و مستقل از کلاس؛
+// با فرم لیستی چند درس هم‌زمان ساخته می‌شود و از طریق فرم ایجاد معلم به معلمان منتسب می‌شود.
+model Lesson {
+  id        String   @id @default(cuid())
+  name      String
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  teacherLessons TeacherLesson[]
+  // نمراتی که با این درس ثبت شده‌اند — حذف درس، درسِ نمرات را خالی می‌کند (نمرات می‌مانند)
+  grades         StudentGrade[]
+
+  @@unique([schoolId, name])
+  @@index([schoolId])
+}
+
+// ─── انتساب درس به معلم (درخواست کاربر — فیلد چندانتخابی فرم ایجاد معلم) ───
+// هر معلم می‌تواند یک یا چند درس داشته باشد؛ مبنا dropdown «درس» در ثبت نمره است.
+model TeacherLesson {
+  id        String   @id @default(cuid())
+  teacherId String
+  teacher   User     @relation("teacherLessonTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+  lessonId  String
+  lesson    Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([teacherId, lessonId])
+  @@index([lessonId])
+}
+
+// ─── نمرهٔ دانش‌آموز (درخواست کاربر — ستون «نمره» در ثبت حضور و غیاب معلم) ───
+// معلم در روز انتخابی برای هر دانش‌آموز نمره ثبت می‌کند؛
+// عنوان نمره (مثلاً «آزمون مهر ماه») و درس مربوط با کل فرم ارسال می‌شوند.
+// در صورت ثبت حداقل یک نمره، عنوان نمره اجباری می‌شود (اعتبارسنجی سرور و کلاینت).
+model StudentGrade {
+  id          String    @id @default(cuid())
+  studentId   String
+  student     User      @relation("gradeStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  classroomId String
+  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  // کلید جلالی روز نمره — هم‌راستا با جلسات حضور و غیاب
+  dateKey     String
+  // جلسهٔ حضور و غیاب مرتبط (اگر از ویرایشگر جلسه ثبت شده باشد) — اختیاری
+  sessionId   String?
+  session     AttendanceSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  // عنوان نمره (اجباری در صورت ثبت نمره)
+  title       String
+  // درس مرتبط — اختیاری؛ فقط از درس‌های منتسب به معلم
+  lessonId    String?
+  lesson      Lesson?   @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  // خود نمره — رشتهٔ کوتاه (عددی یا توصیفی مثل «خیلی خوب»)
+  score       String
+  creatorId   String
+  creator     User      @relation("gradeCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([studentId, dateKey])
+  @@index([classroomId, dateKey])
+  @@index([sessionId])
+}
+
+// ─── محدودیت دسترسی‌های معاون مدرسه (درخواست کاربر) ───
+// معاون به‌طور پیش‌فرض «همهٔ» دسترسی‌های مدیر مدرسه را دارد؛
+// هر ردیف یک مجوز است که مدیر مدرسه می‌تواند جداگانه خاموش/روشن کند.
+// نبودِ ردیف = مجوز فعال (پیش‌فرض روشن). فقط کاربران نقش SCHOOL_VICE ردیف دارند.
+model VicePermission {
+  id        String   @id @default(cuid())
+  viceId    String
+  vice      User     @relation("vicePermissionVice", fields: [viceId], references: [id], onDelete: Cascade)
+  // کلید مجوز از VICE_PERMISSIONS (src/lib/vice-permissions.ts)
+  key       String
+  // false = محدود شده توسط مدیر مدرسه
+  enabled   Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+
+  @@unique([viceId, key])
 }
 
 // آمار مصرف و خطا — بدون هیچ متن گفتگو؛ فقط مدیر کل می‌بیند
@@ -906,7 +1032,7 @@ model InfraSetting {
   diskThreshold   Int      @default(90)
   // تعداد نمونهٔ متوالی بالای آستانه برای «هشدار پایدار» (جلوگیری از هشدار لحظه‌ای)
   sustainedCount  Int      @default(3)
-  updatedAt       DateTime @updatedAt
+  updatedAt       DateTime @default(now()) @updatedAt
 }
 
 // رویدادهای پایش: خطای سرویس، هشدار پایدار منابع و بازیابی — فقط تغییر وضعیت
@@ -920,4 +1046,18 @@ model InfraEventLog {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+}
+
+// انواع تخلف (درخواست کاربر) — فهرست کشویی چندانتخابی ثبت تخلف در ویرایشگر جلسه؛
+// مدیر کل از پنل خود گزینه‌ها را مدیریت می‌کند (افزودن/غیرفعال‌کردن/حذف).
+// تخلف‌های ثبت‌شدهٔ قبلی متن آزاد خود را حفظ می‌کنند (سابقه دست‌نخورده).
+model ViolationType {
+  id        String   @id @default(cuid())
+  // برچسب تخلف (مثلاً «انجام ندادن تکلیف») — یکتا
+  label     String   @unique
+  // غیرفعال: در فهرست انتخاب معلم/مدیر نمایش داده نمی‌شود اما سابقه حفظ می‌شود
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { toast } from '@/hooks/use-toast'
+import { ModirSectionSubNav } from '@/components/modir/section-subnav'
 
 interface TargetClassroom {
   id: string
@@ -21,7 +22,7 @@ interface Selection {
   groups: Set<string>
 }
 
-export function AnnouncementsClient() {
+export function AnnouncementsClient({ showSubNav = false }: { showSubNav?: boolean }) {
   const [classrooms, setClassrooms] = useState<TargetClassroom[] | null>(null)
   const [selection, setSelection] = useState<Selection>({ classrooms: new Set(), groups: new Set() })
   const [body, setBody] = useState('')
@@ -108,6 +109,17 @@ export function AnnouncementsClient() {
           اطلاعیه برای کلاس‌ها یا گروه‌های انتخاب‌شده ارسال می‌شود و در گفتگوی گروه‌های آن‌ها با طرح ویژه نمایش داده می‌شود.
         </p>
       </div>
+
+      {/* زیرناوبری دو صفحه‌ای اطلاعیه‌ها (لیست / ارسال) */}
+      {showSubNav && (
+        <ModirSectionSubNav
+          active="add"
+          listHref="/modir/announcements"
+          addHref="/modir/announcements/add"
+          listLabel="اطلاعیه‌های اخیر"
+          addLabel="ارسال اطلاعیه"
+        />
+      )}
 
       <Card>
         <CardHeader className="pb-3">

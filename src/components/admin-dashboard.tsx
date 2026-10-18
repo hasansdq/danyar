@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
+import { apiFetch } from '@/lib/client-api'
 import {
   Dialog,
   DialogContent,
@@ -80,6 +81,7 @@ export function AdminDashboard() {
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [stats, setStats] = useState<Stats | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const [name, setName] = useState('')
   const [creating, setCreating] = useState(false)
@@ -104,16 +106,23 @@ export function AdminDashboard() {
   const [deleting, setDeleting] = useState(false)
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/schools?page=${page}&pageSize=${PAGE_SIZE}&q=${encodeURIComponent(search)}`)
+    setLoadError(null)
+    // apiFetch: 401 (نشست باطل/زامبی) → هداشت خودکار به ورود
+    const res = await apiFetch(`/api/schools?page=${page}&pageSize=${PAGE_SIZE}&q=${encodeURIComponent(search)}`)
     if (res.ok) {
       const data = await res.json()
       setSchools(data.schools)
       setTotal(data.total)
+    } else {
+      // نادیده‌گرفتن بی‌صدا = «لودینگ بی‌پایان» — پیام خطا نمایش داده می‌شود
+      const d = await res.json().catch(() => null)
+      setLoadError(d?.error ?? 'بارگذاری مدارس ناموفق بود')
+      setSchools([])
     }
   }, [page, search])
 
   const loadStats = useCallback(async () => {
-    const res = await fetch('/api/admin/stats')
+    const res = await apiFetch('/api/admin/stats')
     if (res.ok) setStats((await res.json()).stats)
   }, [])
 
@@ -417,7 +426,15 @@ export function AdminDashboard() {
           </div>
         </CardHeader>
         <CardContent>
-          {schools === null ? (
+          {loadError ? (
+            <div className="flex flex-col items-center gap-3 py-8 text-center">
+              <p className="text-sm text-destructive">{loadError}</p>
+              <Button variant="outline" size="sm" onClick={() => void load()}>
+                <Loader2 className="h-4 w-4 me-1" />
+                تلاش مجدد
+              </Button>
+            </div>
+          ) : schools === null ? (
             <div className="flex justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>

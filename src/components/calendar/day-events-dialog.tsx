@@ -80,6 +80,9 @@ interface DayEventsDialogProps {
   classId: string
   className: string
   onChanged: () => void
+  /** توکن «بازکردن خودکار ویرایشگر ثبت غیبت/نمره/تخلف» (دیپ‌لینک FAB معلم) —
+   *  هر مقدار فقط یک بار مصرف می‌شود؛ توکن تازه = بازشدن دوباره */
+  autoOpenAttendance?: string
 }
 
 /**
@@ -88,7 +91,7 @@ interface DayEventsDialogProps {
  * - معلم و مدیر مدرسه: ثبت رویداد جدید (تعطیل فقط مدیر + انتخاب دامنه کلاس/کل مدرسه)
  * - تکلیف: بخش تکالیف قدیمی به این‌جا منتقل شد — معلم با انتخاب نوع «تکلیف» هم‌زمان
  *   تکلیف درسی (گروه درسی، مهلت، نمره، پیوست) می‌سازد و رویداد تقویم به آن وصل می‌شود
- * - حضور و غیاب: دکمه «ثبت غیبت‌های امروز» برای معلم و مدیر (لیست دانش‌آموزان کلاس)
+ * - حضور و غیاب و تخلفات: دکمه «ثبت غیبت/نمره/تخلف» برای معلم و مدیر (لیست دانش‌آموزان کلاس)
  * - حذف: مدیر هر رویداد مدرسه خودش، معلم فقط رویدادهای ثبت‌شده خودش
  */
 export function DayEventsDialog({
@@ -101,12 +104,14 @@ export function DayEventsDialog({
   classId,
   className,
   onChanged,
+  autoOpenAttendance,
 }: DayEventsDialogProps) {
   // از sonner استفاده می‌کنیم (نه توست radix) تا لایه‌ای بالای دیالوگ باز نشود و
   // کلید Escape همیشه بتواند دیالوگ را ببندد
-  const isAdmin = role === 'SCHOOL_ADMIN'
+  // معاون همهٔ دسترسی‌های مدیر مدرسه را دارد (درخواست کاربر) — محدودیت‌ها سمت API اعمال می‌شود
+  const isAdmin = role === 'SCHOOL_ADMIN' || role === 'SCHOOL_VICE'
   const isTeacher = role === 'TEACHER'
-  const canCreate = role === 'SCHOOL_ADMIN' || role === 'TEACHER'
+  const canCreate = isAdmin || isTeacher
 
   const [type, setType] = useState<ClassEventType>('EXAM')
   const [customTitle, setCustomTitle] = useState('')
@@ -170,12 +175,21 @@ export function DayEventsDialog({
     setAttendanceOpen(false)
   }, [dateKey, open])
 
+  // دیپ‌لینک FAB معلم — با باز شدن دیالوگ روز، ویرایشگر «ثبت غیبت/نمره/تخلف»
+  // مستقیم باز شود (هر توکن فقط یک بار؛ بعد از اثر ریست بالا اجرا می‌شود)
+  const autoAttFiredFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!open || !autoOpenAttendance || !canCreate) return
+    if (autoAttFiredFor.current === autoOpenAttendance) return
+    autoAttFiredFor.current = autoOpenAttendance
+    setAttendanceOpen(true)
+  }, [open, autoOpenAttendance, canCreate])
+
   // انتخاب پیش‌فرض گروه پس از رسیدن فهرست گروه‌ها
   useEffect(() => {
     if (groups && groups.length > 0 && !groups.some((g) => g.id === groupId)) {
       setGroupId(groups[0].id)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groups])
 
   const sorted = useMemo(
@@ -187,7 +201,7 @@ export function DayEventsDialog({
   )
 
   const canDeleteEvent = (e: CalendarEventDto) =>
-    role === 'SCHOOL_ADMIN' || (role === 'TEACHER' && e.createdById === uid)
+    role === 'SCHOOL_ADMIN' || role === 'SCHOOL_VICE' || (role === 'TEACHER' && e.createdById === uid)
 
   const pickFile = async (f: File | null) => {
     if (!f) return
@@ -465,9 +479,9 @@ export function DayEventsDialog({
               <CalendarCheck2 className="h-4 w-4" />
             </span>
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-bold">حضور و غیاب این روز</div>
+              <div className="text-sm font-bold">برای امروز غیبت، نمره یا تخلف ثبت کنید</div>
               <div className="text-[11px] text-muted-foreground">
-                ثبت حاضر/غایب دانش‌آموزان کلاس «{className}»
+                ثبت حاضر/غایب و تخلف دانش‌آموزان کلاس «{className}»
               </div>
             </div>
             <Button
@@ -478,7 +492,7 @@ export function DayEventsDialog({
               data-testid="open-attendance-button"
             >
               <CalendarCheck2 className="h-4 w-4" />
-              ثبت غیبت‌های امروز
+              ثبت غیبت/نمره/تخلف
             </Button>
           </div>
         )}
@@ -789,6 +803,7 @@ export function DayEventsDialog({
           dateKey={dateKey}
           classId={classId}
           className={className}
+          role={role}
         />
       </DialogContent>
     </Dialog>

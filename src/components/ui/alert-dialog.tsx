@@ -5,11 +5,37 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"
+import { useDialogHistory } from "@/lib/dialog-history"
 
 function AlertDialog({
+  open: openProp,
+  onOpenChange,
+  defaultOpen,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Root>) {
-  return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />
+  // دکمهٔ back موبایل پنجرهٔ باز را می‌بندد (درخواست کاربر) — هم‌گام با history
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false)
+  const isControlled = openProp !== undefined
+  const open = isControlled ? openProp : uncontrolledOpen
+
+  const handleOpenChange = React.useCallback(
+    (next: boolean) => {
+      if (!isControlled) setUncontrolledOpen(next)
+      onOpenChange?.(next)
+    },
+    [isControlled, onOpenChange],
+  )
+
+  useDialogHistory(Boolean(open), handleOpenChange)
+
+  return (
+    <AlertDialogPrimitive.Root
+      data-slot="alert-dialog"
+      open={open}
+      onOpenChange={handleOpenChange}
+      {...props}
+    />
+  )
 }
 
 function AlertDialogTrigger({

@@ -68,7 +68,8 @@ export function JalaliCalendar({
     onMonthChange?.(y, m)
   }
 
-  const faNum = (n: number) => new Intl.NumberFormat('fa-IR').format(n)
+  // سال بدون جداکنندهٔ سه‌رقمی (درخواست کاربر — مثل ۱۴۰۵ نه ۱٬۴۰۵)
+  const faNum = (n: number) => new Intl.NumberFormat('fa-IR', { useGrouping: false }).format(n)
 
   return (
     <div className={cn('rounded-xl border bg-card p-3 sm:p-4', className)} dir="rtl">
@@ -133,7 +134,7 @@ export function JalaliCalendar({
                 inRange && hasDots && !isSelected && 'bg-primary/5',
               )}
             >
-              <span>{faNum(day)}</span>
+              <span className="text-[13px] font-medium sm:text-lg sm:leading-7">{faNum(day)}</span>
               {info?.dots?.length ? (
                 <span className="absolute bottom-1 flex gap-0.5" dir="ltr">
                   {info.dots

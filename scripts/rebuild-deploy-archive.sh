@@ -73,3 +73,7 @@ else
 fi
 echo "no pid files: $(echo "$TARLIST" | grep -c '\.pid$' || true) (انتظار: 0)"
 rm -f "$LIST"
+
+# نسخهٔ سرو‌شده برای دانلود از پیش‌نمایش (untracked — فقط مصنوعات runtime)
+cp -f "$OUT" public/daniar-repo-deploy.tar.gz
+echo "served copy: public/daniar-repo-deploy.tar.gz ($(stat -c%s public/daniar-repo-deploy.tar.gz 2>/dev/null || echo '?') bytes)"

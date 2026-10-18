@@ -12,8 +12,10 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import { LogIn, Loader2, ShieldCheck, MessageSquareText, KeyRound, Bot, Check } from 'lucide-react'
+import { LogIn, Loader2, ShieldCheck, MessageSquareText, KeyRound, Bot, Check, Eye, EyeOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { InstallLoginHint } from '@/components/install-login-hint'
+import { TEACHER_FAB_REMINDER_KEY } from '@/components/teacher-fab'
 
 interface LoginFormProps {
   realm: 'app' | 'superadmin'
@@ -46,6 +48,8 @@ export function LoginForm({ realm, title, description }: LoginFormProps) {
 
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  // نمایش/مخفی‌کردن رمز عبور با آیکون چشم
+  const [showPassword, setShowPassword] = useState(false)
   // مقصد پس از ورود (مثلاً از کلیک اعلان وقتی کاربر وارد نبوده: /login?next=…)
   const [nextPath, setNextPath] = useState('')
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -77,6 +81,16 @@ export function LoginForm({ realm, title, description }: LoginFormProps) {
     }, 1000)
   }
 
+  // ورود موفق اپ — پرچم یادآوری دکمه «+» معلم پاک می‌شود تا بعد از هر ورود دوباره نمایش داده شود
+  function resetTeacherReminder() {
+    if (realm !== 'app') return
+    try {
+      sessionStorage.removeItem(TEACHER_FAB_REMINDER_KEY)
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
@@ -97,6 +111,14 @@ export function LoginForm({ realm, title, description }: LoginFormProps) {
       if (!res.ok) {
         setError(data.error ?? 'ورود ناموفق بود')
         setLoading(false)
+        return
+      }
+      // ورود موفق — پرچم یادآوری معلم برای این نشست جدید پاک شود
+      resetTeacherReminder()
+      // ورود با رمز پیش‌فرض — تغییر رمز اجباری، حتی از مقصد قبلی (next) مهم‌تر است
+      if (data.mustChangePassword) {
+        router.push('/settings?force=1')
+        router.refresh()
         return
       }
       // مقصد از اعلان/مسیر درخواستی در اولویت است
@@ -167,6 +189,14 @@ export function LoginForm({ realm, title, description }: LoginFormProps) {
       const data = await res.json()
       if (!res.ok) {
         setError(data.error ?? 'ورود ناموفق بود')
+        return
+      }
+      // ورود موفق — پرچم یادآوری معلم برای این نشست جدید پاک شود
+      resetTeacherReminder()
+      // ورود با رمز پیش‌فرض — تغییر رمز اجباری، حتی از مقصد قبلی (next) مهم‌تر است
+      if (data.mustChangePassword) {
+        router.push('/settings?force=1')
+        router.refresh()
         return
       }
       // مقصد از اعلان/مسیر درخواستی در اولویت است
@@ -264,16 +294,33 @@ export function LoginForm({ realm, title, description }: LoginFormProps) {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="password">رمز عبور</Label>
-                  <Input
-                    id="password"
-                    name="password"
-                    type="password"
-                    autoComplete="current-password"
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                  />
+                  <div className="relative">
+                    <Input
+                      id="password"
+                      name="password"
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      placeholder={showPassword ? 'password' : '••••••••'}
+                      className="pe-10"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? 'مخفی‌کردن رمز عبور' : 'نمایش رمز عبور'}
+                      aria-pressed={showPassword}
+                      title={showPassword ? 'مخفی‌کردن رمز عبور' : 'نمایش رمز عبور'}
+                      className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {showPassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </button>
+                  </div>
                 </div>
 
                 {error && (
@@ -401,13 +448,8 @@ export function LoginForm({ realm, title, description }: LoginFormProps) {
           </CardContent>
         </Card>
 
-        {!isSuper && (
-          <p className="text-center text-xs text-muted-foreground">
-            <a href="/superadmin" className="underline underline-offset-4 hover:text-foreground">
-              ورود مدیر کل پلتفرم
-            </a>
-          </p>
-        )}
+        {/* راهنمای/دکمهٔ نصب برنامه روی موبایل (PWA) */}
+        <InstallLoginHint />
       </div>
     </div>
   )

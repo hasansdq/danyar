@@ -14,7 +14,7 @@ export const metadata = { title: 'تقویم آموزشی | دانیار' }
 export default async function CalendarPage({
   searchParams,
 }: {
-  searchParams: Promise<{ class?: string }>
+  searchParams: Promise<{ class?: string; open?: string; t?: string }>
 }) {
   const session = await getSession()
   if (!session) redirect('/login')
@@ -28,6 +28,9 @@ export default async function CalendarPage({
         role={session.role}
         uid={session.uid}
         initialClassId={sp.class}
+        // دیپ‌لینک دکمه شناور «+» معلم: /calendar?open=attendance&t=… →
+        // انتخاب خودکار امروز + بازشدن مستقیم ویرایشگر «ثبت غیبت/نمره/تخلف»
+        autoAttendance={sp.open === 'attendance' ? (sp.t ?? '0') : undefined}
       />
     </AppShell>
   )

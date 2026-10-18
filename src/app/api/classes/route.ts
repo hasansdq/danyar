@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireSchoolAdmin, jsonError } from '@/lib/api-auth'
+import { requireSchoolManager, jsonError } from '@/lib/api-auth'
 import { BRANCH_MAX, GRADE_OPTIONS, composeClassName } from '@/lib/school'
 
 export async function GET() {
-  const res = await requireSchoolAdmin()
+  const res = await requireSchoolManager()
   if ('response' in res) return res.response
 
   const classrooms = await db.classroom.findMany({
@@ -18,7 +18,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  // معاون: مدیریت کلاس‌ها فقط با مجوز مربوطه (سوییچ مدیر مدرسه)
+  const res = await requireSchoolManager('classes')
   if ('response' in res) return res.response
 
   const body = await req.json().catch(() => null)
@@ -62,7 +63,8 @@ export async function POST(req: NextRequest) {
  * همه کلاس‌های مدرسه به‌یک‌بار.
  */
 export async function PATCH(req: NextRequest) {
-  const res = await requireSchoolAdmin()
+  // معاون: مدیریت کلاس‌ها فقط با مجوز مربوطه (سوییچ مدیر مدرسه)
+  const res = await requireSchoolManager('classes')
   if ('response' in res) return res.response
 
   const body = await req.json().catch(() => null)

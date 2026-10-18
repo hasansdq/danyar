@@ -109,11 +109,11 @@ export function monthRange(jy: number, jm: number): { from: string; to: string }
   }
 }
 
-/** «۱۹ مهر ۱۴۰۴» — با ارقام فارسی */
+/** «۱۹ مهر ۱۴۰۴» — با ارقام فارسی (سال بدون جداکنندهٔ سه‌رقمی) */
 export function formatJalaliDate(key: string, opts?: { withWeekday?: boolean }): string {
   const p = parseDateKey(key)
   if (!p) return key
-  const fa = (n: number) => new Intl.NumberFormat('fa-IR').format(n)
+  const fa = (n: number) => new Intl.NumberFormat('fa-IR', { useGrouping: false }).format(n)
   const base = `${fa(p.jd)} ${JALALI_MONTHS[p.jm - 1]} ${fa(p.jy)}`
   if (opts?.withWeekday) return `${JALALI_WEEKDAYS_FULL[weekdayOfDateKey(key)]}، ${base}`
   return base

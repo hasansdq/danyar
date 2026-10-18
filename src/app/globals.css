@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* نکته: ریشهٔ اسکن منابع Tailwind در postcss.config.mjs (گزینهٔ base) روی ./src تنظیم
+   شده تا اسکن کلاس‌ها هرگز وارد پوشهٔ upload (سوار روی FUSE/ossfs) نشود — اگر FUSE
+   هنگ کند کامپایل CSS قفل نمی‌شود. */
+
 @custom-variant dark (&:is(.dark *));
 
 @font-face {

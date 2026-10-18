@@ -43,7 +43,7 @@ fi
 required_nonempty() {
   local VAR="$1" MINLEN="$2"
   local VAL
-  VAL=$(grep -E "^${VAR}=" .env | head -1 | cut -d= -f2- | tr -d '"' || true)
+  VAL="$(daniar_env_value "$VAR")"
   [ -n "$VAL" ] || fail "${VAR} در .env تعیین نشده است"
   case "$VAL" in
     *please-change*|*change-this*|*daniar-dev*|Admin@1234)
@@ -62,7 +62,7 @@ required_nonempty SUPERADMIN_INITIAL_PASSWORD 12
 grep -qE '^DATABASE_URL=' .env && fail "DATABASE_URL نباید در .env سرور باشد — docker-compose خودش file:/data/daniar.db را تنظیم می‌کند" || true
 
 # ۳.۵) پروفایل سرویس رسانه (LiveKit SFU) — کلیدها وقتی الزامی‌اند که فعال باشد
-PROFILES="$(grep -E '^COMPOSE_PROFILES=' .env | head -1 | cut -d= -f2- | tr -d '\"' || true)"
+PROFILES="${COMPOSE_PROFILES-$(daniar_env_value COMPOSE_PROFILES)}"
 has_profile() { echo ",${PROFILES:-}," | grep -q ",$1,"; }
 if [ -z "${PROFILES}" ] || has_profile media; then
   echo "── بررسی کلیدهای سرویس رسانه (LiveKit) ──"
@@ -71,7 +71,7 @@ if [ -z "${PROFILES}" ] || has_profile media; then
   required_nonempty LIVEKIT_API_SECRET 32
   # IP عمومی VPS: با use_external_ip=false کاندیدهای ICE از همین IP ساخته می‌شوند؛
   # بدون آن در شبکه‌های محدود STUN خارجی شکست می‌خورد و استریم بالا نمی‌آید
-  NODEIP=$(grep -E '^LIVEKIT_NODE_IP=' .env | head -1 | cut -d= -f2- | tr -d '"' || true)
+  NODEIP="$(daniar_env_value LIVEKIT_NODE_IP)"
   [ -n "$NODEIP" ] || fail "LIVEKIT_NODE_IP در .env تعیین نشده — IP عمومی VPS (کاندیدهای ICE رسانه)؛ مثال: LIVEKIT_NODE_IP=203.0.113.10"
   echo "$NODEIP" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || fail "LIVEKIT_NODE_IP باید IPv4 عمومی باشد (فعلی: $NODEIP)"
   echo "  ✔ LIVEKIT_NODE_IP=$NODEIP"
@@ -81,7 +81,7 @@ if has_profile turn; then
   echo "── بررسی TURN (شبکه‌های محدود) ──"
   required_nonempty LIVE_TURN_USERNAME 3
   required_nonempty LIVE_TURN_CREDENTIAL 8
-  TEIP=$(grep -E '^TURN_EXTERNAL_IP=' .env | head -1 | cut -d= -f2- | tr -d '"' || true)
+  TEIP="$(daniar_env_value TURN_EXTERNAL_IP)"
   [ -n "$TEIP" ] || fail "TURN_EXTERNAL_IP در .env تعیین نشده — IP عمومی VPS برای تبلیغ رله TURN (بدون آن رله از بیرون کار نمی‌کند)"
   echo "$TEIP" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || fail "TURN_EXTERNAL_IP باید IPv4 عمومی باشد (فعلی: $TEIP)"
   echo "  ✔ TURN_EXTERNAL_IP=$TEIP"
